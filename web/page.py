@@ -222,10 +222,17 @@ def render(brief: dict) -> str:
     # glance from a phone, not an order slip — but it says so first and loudly.
     stop = (f'<div class="err"><b>✕ หยุดเทรดวันนี้</b> — {e(st["reason"])}</div>'
             if st['blocked'] else '')
+    # The rules are config and always true. The running totals come from a
+    # journal this page may not have — showing "0/2 ไม้" without one is not an
+    # empty state, it is a claim that nothing has been traded today.
+    ledger = (f'<span>{e(risk.headline(st))}</span>' if brief.get('has_ledger')
+              else '<span style="opacity:.75">โควตาที่เหลือกับสถานะที่ถืออยู่ '
+                   'อยู่ในสมุดบน terminal — หน้านี้อ่านไม่ได้</span>')
     quota = (f'<div class="alloc"><span>เสี่ยงได้ต่อไม้ '
              f'<b>{n(config.risk_thb(), 0)}฿</b></span>'
              f'<span>เพดานขาดทุน/วัน <b>{n(st["limit"], 0)}฿</b></span>'
-             f'<span>{e(risk.headline(st))}</span></div>')
+             f'<span>สูงสุด <b>{config.MAX_DAILY_TRADES}</b> ไม้/วัน</span>'
+             f'{ledger}</div>')
     held = ''.join(
         f'<span>{e(p.get("bucket", "?"))} <b>{e(p.get("symbol", "?"))}</b> '
         f'{p.get("lots", 0)} lot @ {float(p.get("entry") or 0):.2f}</span>'
@@ -255,5 +262,7 @@ def render(brief: dict) -> str:
 {_dr_card(brief.get('dr'))}
 {_score_card(brief.get('review'))}
 <footer>ข้อมูลจาก TradingView และ thaidw.com · หน้านี้คำนวณสดตอนเปิด<br>
+หน้านี้ดูอย่างเดียว — ซื้อขายแล้วบันทึกที่ terminal ด้วย
+<code>run.py --took</code> / <code>--close</code><br>
 ตัวเลขทั้งหมดเป็นข้อมูลประกอบการตัดสินใจ ไม่ใช่คำแนะนำการลงทุน</footer>
 </div></body></html>"""

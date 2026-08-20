@@ -101,6 +101,8 @@ summary{cursor:pointer;color:var(--muted);font-size:13px}
   padding:12px 14px;font-size:13.5px;margin-bottom:14px}
 footer{color:var(--muted);font-size:12px;text-align:center;margin-top:26px;
   line-height:1.7}
+footer code{font-family:var(--mono);font-size:11.5px;background:var(--track);
+  padding:1px 5px;border-radius:4px}
 """
 
 

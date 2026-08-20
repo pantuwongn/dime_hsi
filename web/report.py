@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from trader import cache, config, marks, review, risk, session
 from trader.buckets import cheap, dr, dw_hsi
 from trader.feeds import thaidw
-from trader.journal import now_bkk
+from trader.journal import load as load_journal, now_bkk
 
 
 def _dw() -> dict:
@@ -70,11 +70,15 @@ def _dr() -> dict:
 def collect(buckets=('dw', 'cheap', 'dr')) -> dict:
     """Returns {bucket: result} plus an 'errors' map for whatever failed."""
     jobs = {'dw': _dw, 'cheap': _cheap, 'dr': _dr}
-    st = risk.state()
+    # The journal is a local file and is deliberately not deployed, so on
+    # Vercel this is empty and every ledger number would be a zero pretending
+    # to be a measurement. Read it once, and let the page know which it has.
+    rows = load_journal()
+    st = risk.state(rows)
     out = {'generated_at': now_bkk(), 'errors': {},
            'budget': dict(config.ALLOC), 'total': config.BUDGET_TOTAL,
-           'risk': st, 'held': [], 'review': review.summarise(),
-           'session': session.state()}
+           'risk': st, 'held': [], 'review': review.summarise(rows),
+           'session': session.state(), 'has_ledger': bool(rows)}
 
     # Marking open positions is a fourth independent call, so it rides along
     # in the same pool rather than adding its latency to the request.
