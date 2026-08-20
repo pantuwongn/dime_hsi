@@ -162,6 +162,29 @@ DW ที่ราคา 0.03/0.04 คือจ่าย 33% ทันที —
 
 ---
 
+## เปิดดูบนมือถือ (deploy ขึ้น Vercel)
+
+ทำครั้งเดียว จากนั้น `git push` ทุกครั้งจะ deploy ให้เองอัตโนมัติ
+
+1. เข้า [vercel.com/new](https://vercel.com/new) → **Import Git Repository** → เลือก `dime_hsi`
+2. กด **Deploy** (ไม่ต้องตั้งค่าอะไร — `vercel.json` กำหนดไว้ให้แล้ว)
+3. ได้ URL แบบ `https://dime-hsi.vercel.app` เปิดจากมือถือได้เลย
+
+ดูหน้าเว็บก่อน deploy ได้ด้วย
+
+```bash
+python3 run.py --html brief.html && xdg-open brief.html
+```
+
+**ทำไมต้องเป็น serverless ไม่ใช่หน้า static** — ทั้ง TradingView และ thaidw
+ไม่ส่ง CORS header เบราว์เซอร์เรียกตรงจึงโดนบล็อก ต้องให้ฝั่งเซิร์ฟเวอร์เรียกแทน
+แลกมาด้วยข้อดีคือหน้าเว็บคำนวณสดทุกครั้งที่เปิด ไม่ต้องรอ cron
+
+ตั้ง `s-maxage=45` ไว้ เพราะกดรีเฟรช 10 ครั้งใน 1 นาที ไม่ควรแปลว่าสแกน
+ตลาดไทยทั้งตลาด 10 รอบ
+
+---
+
 ## บันทึกการเทรด
 
 ทุกคำแนะนำถูกเขียนต่อท้าย `journal.jsonl` (ไม่ขึ้น git) เพื่อให้ย้อนวัดได้จริง
@@ -172,8 +195,14 @@ DW ที่ราคา 0.03/0.04 คือจ่าย 33% ทันที —
 ## โครงสร้าง
 
 ```
-run.py                    CLI + การแสดงผล
+run.py                    CLI + การแสดงผล  (--html สร้างหน้าเว็บ)
 selftest.py               ตรวจว่าทุกบรรทัดพอดีกรอบ (รันหลังแก้คอลัมน์)
+vercel.json               ตั้งค่า deploy
+api/index.py              serverless entry point
+web/
+├── report.py             เก็บข้อมูล 3 ก้อนพร้อมกัน (ใช้ร่วมกับ terminal)
+├── page.py               ประกอบหน้า HTML
+└── html.py               CSS + ชิ้นส่วนกราฟ (เกจ, ladder, RR bar)
 trader/
 ├── config.py             งบ เกณฑ์ เวลา — แก้ที่นี่ที่เดียว
 ├── sizing.py             จำนวน lot, ค่าธรรมเนียม, spread, ตารางช่องราคา
