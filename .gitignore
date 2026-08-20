@@ -1,10 +1,14 @@
 __pycache__/
 *.py[cod]
-*.class
-*.so
 .DS_Store
 .env
 .venv
 env/
 venv/
 ENV/
+
+# บันทึกการเทรดส่วนตัว
+journal.jsonl
+
+# ประวัติราคาที่สะสมเองไว้วาด sparkline
+.cache/

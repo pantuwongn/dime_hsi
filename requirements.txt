@@ -1,5 +1,7 @@
-pandas>=2.0.0
-numpy>=1.26.0
-yfinance>=1.6.0
-rich>=13.0.0
-pytz>=2024.1
+# ไม่มี dependency — ใช้ standard library ล้วน (urllib + json)
+#
+# เดิมโปรเจคนี้ใช้ pandas / numpy / yfinance / rich แต่ตัดออกทั้งหมด เพราะ:
+#   * yfinance โดน Yahoo rate-limit (HTTP 429) หลังยิงไม่กี่สิบครั้ง
+#     ซึ่งการสแกนหลายสิบตัวคูณหลาย timeframe ทำให้ชนเพดานทุกรอบ
+#   * TradingView scanner คำนวณ RSI / MACD / EMA / ATR มาให้แล้วทุก timeframe
+#     จึงไม่ต้องดึงแท่งเทียนมาคำนวณเองด้วย pandas

@@ -1,127 +1,195 @@
-# 🇭🇰 Hang Seng Index (HSI) & 🇹🇭 SET50 / Thai Stock DW Day Trading Suite
+# แผนเทรดรายวัน 3 ก้อน — HSI DW / หุ้นไทยราคาต่ำ / DR
 
-A real-time Python terminal suite for **Day Traders** looking to trade **Derivative Warrants (Call DW / Put DW)** on:
-1. **Hang Seng Index (`^HSI`)**
-2. **SET50 Index & Thai Stocks** (`S50`, `DELTA`, `GULF`, `ADVANC`, `PTTEP`, `TRUE`, `SIRI`, `TTB`, `WHA`, etc.)
+เครื่องมือบรรทัดเดียวสำหรับพอร์ตเล็ก: รันตอนเช้า อ่านผล วาง order แล้วไปทำงาน
+
+```bash
+python3 run.py                 # ทั้ง 3 ก้อน
+python3 run.py --bucket dw     # เฉพาะ HSI DW
+python3 run.py --bucket cheap  # เฉพาะหุ้นไทย < 3 บาท
+python3 run.py --bucket dr     # เฉพาะ DR
+python3 run.py --no-journal    # ไม่บันทึกลง journal.jsonl
+python3 run.py --plain         # ปิดกรอบและแถบกราฟ (สำหรับ pipe ลงไฟล์)
+python3 run.py --color | less -R   # บังคับใช้สีตอน pipe
+python3 selftest.py            # ตรวจว่าทุกบรรทัดยังพอดีกรอบ
+```
+
+**ไม่ต้องติดตั้งอะไรเลย** ใช้ Python standard library ล้วน — กราฟทั้งหมดวาดด้วย
+ANSI + Unicode box drawing ไม่ได้พึ่ง `rich` หรือ lib ใด ๆ
+
+## หน้าตาผลลัพธ์
+
+```
+╭─ ก้อน A · HSI DW · เดย์เทรด ──────────────────────────────────────────╮
+│   HSI (spot)      25,830  ▲ 1.32%   █▅▁▁                             │
+│   ช่วงราคาวันนี้      25,632  └─────────────────────────●─┘ 25,843        │
+│   รวมถ่วงน้ำหนัก     ···············┃███████········  +47    BULLISH     │
+│                            ▲            ▲     ▲ = เกณฑ์เข้า ±45        │
+│   15m   น้ำหนัก 45%   ▒▒▒▒▒▒──────●─▒▒▒▒▒▒  RSI 67     +49            │
+│                                                                      │
+│ HSI28C2609B    27,600   0.48/0.49  █▊····· 2%   29  ████████▎ 18x    │
+│                                                                      │
+│   ราคา DW         ┫········▓▓▓▓◆·······················┣              │
+│   เสี่ยง : ได้       ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄   RR 1.7          │
+╰──────────────────────────────────────────────────────────────────────╯
+```
+
+| กราฟ | อ่านว่าอะไร |
+| :-- | :-- |
+| `···┃███···` | เกจสัญญาณ ศูนย์อยู่ตรงกลาง เขียวขวา=ขึ้น แดงซ้าย=ลง `▲` คือเกณฑ์เข้า |
+| `▒▒──●──▒▒` | RSI 0–100 พื้นที่ `▒` คือโซน < 30 และ > 70 |
+| `└───●──┘` | ราคาปัจจุบันอยู่ตรงไหนของช่วงวัน |
+| `┫···▓▓◆···┣` | แกนราคา DW: `┫`=SL `▓`=spread ที่ต้องจ่าย `◆`=ราคาที่เข้า `┣`=TP |
+| `▄▄▄▄████` | แดง=ส่วนที่เสี่ยง เขียว=ส่วนที่ได้ ยาวตามสัดส่วนจริง |
+| `█▅▁▁` | sparkline สะสมจากการรันครั้งก่อน ๆ (ดูหัวข้อด้านล่าง) |
+
+## สีบอกอะไร
+
+ดูแค่สีก็รู้ว่าต้องทำอะไร ไม่ต้องอ่านตัวเลข
+
+| ป้าย | สี | หมายความว่า |
+| :-- | :-- | :-- |
+| `▲ ซื้อ CALL DW` | พื้น**เขียว** | สัญญาณขึ้น — ซื้อ Call DW ตัวที่ระบุ |
+| `▼ ซื้อ PUT DW` | พื้น**แดง** | สัญญาณลง — ซื้อ Put DW ตัวที่ระบุ |
+| `▲ ซื้อ` | พื้น**เขียว** | ก้อน B / C มีตัวให้เข้า |
+| `■ ไม่เข้า` | พื้น**เหลือง** | สัญญาณไม่ถึงเกณฑ์ → ถือเงินสด |
+| `✕ ไม่มีของให้ซื้อ` | พื้น**เทา** | สัญญาณมา แต่ DW ทุกตัวติดเกณฑ์ spread/theta |
+
+**กรอบทั้งกล่องเปลี่ยนสีตามคำตอบด้วย** — เขียวทั้งกล่อง = Call, แดงทั้งกล่อง = Put,
+เหลือง = ไม่เข้า ในตาราง DW ชื่อ Call เป็นเขียว ชื่อ Put เป็นแดงเสมอ
+
+ปิดสีทั้งหมดด้วย `NO_COLOR=1 python3 run.py`
+
+**หมายเหตุเรื่อง sparkline** — ไม่มีแหล่งข้อมูลย้อนหลังฟรีที่เข้าถึงได้จากที่นี่
+(Yahoo ตอบ 429, SET/settrade ติด Imperva, thaidw มีแต่รูปกราฟ) เส้นจึงสร้างจาก
+`.cache/series.jsonl` ที่บันทึกทุกครั้งที่รัน ยิ่งรันบ่อยเส้นยิ่งยาว
+ตอนยังไม่มีข้อมูลจะขึ้นเป็นจุด `····` ไม่ใช่เส้นที่เดาขึ้นมาเอง
 
 ---
 
-## 🚀 Quick Start Commands
+## 3 ก้อนที่ดูอยู่
 
-### 1. 🇹🇭 Scan All SET50 & Active Thai DW Stocks
-```bash
-python3 thai_dw_screener.py
-```
+| ก้อน | ดูอะไร | ถือนานแค่ไหน | งบ |
+| :-- | :-- | :-- | --: |
+| **A · HSI DW** | DW ฮั่งเส็งที่จดทะเบียนในไทย ผู้ออก **18 (KTX)** และ **28 (MACQ)** | เดย์เทรด ปิดก่อน 15:45 | 1,200฿ |
+| **B · หุ้นไทยถูก** | หุ้น SET ราคาต่ำกว่า 3 บาท | สวิง 5 วัน | 2,500฿ |
+| **C · DR** | DR ที่จดทะเบียนในไทย เทรดตาม gap เปิดตลาด | เดย์เทรด / ข้ามคืน | 1,300฿ |
 
-### 2. 💰 Scan Only Cheap / Low-Priced Thai Stocks (< 5 THB, e.g. SIRI, TTB, WHA, BTS)
-```bash
-python3 thai_dw_screener.py --cheap-only
-```
-
-### 3. 🎯 Deep-Dive Specific Thai Stock (e.g. SIRI or DELTA)
-```bash
-python3 hsi_analyzer.py --ticker SIRI.BK --timeframe 15m
-python3 hsi_analyzer.py --ticker DELTA.BK --timeframe 5m
-```
-
-### 4. 🇭🇰 Live Hang Seng Index Dashboard
-```bash
-python3 hsi_analyzer.py --live
-```
-
-1. **Intraday Technical Indicators (via Pandas & NumPy)**:
-   - **RSI (14)**: Wilder's smoothing algorithm with visual momentum gauge and overbought/oversold alerts.
-   - **MACD (12, 26, 9)**: Fast line, Signal line, Histogram acceleration, Golden Cross and Death Cross detection.
-   - **Trend Ribbon (EMA 9, 21, 50)**: Dynamic support/resistance and moving average stack alignment.
-   - **ATR (14)**: Average True Range for volatility measurement and dynamic stop-loss buffer calculation.
-   - **Intraday Floor Pivot Points**: R2, R1, Pivot Point (P), S1, S2 calculated from daily session data.
-
-2. **Multi-Timeframe Alignment Matrix (1m | 5m | 15m | 60m)**:
-   - Checks higher timeframe trend before recommending short-term entries.
-   - Avoids "false alarms" and traps on micro-timeframes.
-
-3. **DW Day Trading Recommendation Engine**:
-   - 🟢 **BUY CALL DW (STRONG BULLISH)**: Multi-timeframe trend up, MACD expanding above signal, RSI healthy (50–70).
-   - 🟢 **CALL BIAS (Wait For Dip)**: Bullish structure, suggests waiting for pullback to EMA9/21.
-   - 🟡 **STANDBY / NO TRADE (Chop)**: Conflicting indicators or low volatility (*protects against DW Theta decay*).
-   - 🔴 **PUT BIAS (Wait For Rebound)**: Bearish structure, suggests shorting on bounce rejection.
-   - 🔴 **BUY PUT DW (STRONG BEARISH)**: Multi-timeframe trend down, MACD expanding below signal, RSI breaking below 50.
-
-4. **Rich Terminal UI**:
-   - Modern, color-coded terminal dashboard.
-   - HKEX Market Status & Session indicator (HKT vs BKK time).
-   - Snapshot mode or live continuous auto-refresh mode.
+แก้งบและเกณฑ์ทั้งหมดได้ที่ `trader/config.py`
 
 ---
 
-## 📦 Installation
+## ⚠️ อ่านก่อนใช้ — 2 เรื่องที่สำคัญกว่าตัวสัญญาณ
 
-```bash
-pip install -r requirements.txt
+**1. ค่าคอมขั้นต่ำจะกินพอร์ตขนาดนี้ทั้งเป็น**
+
+โบรกหลายรายคิดค่าคอมขั้นต่ำ 50 บาท/วัน ถ้าคุณอยู่กับโบรกแบบนั้น
+ไม้ละ 1,200 บาทจะเสียค่าธรรมเนียมไปกลับ 100 บาท = **8.3%** ซึ่งไม่มีสัญญาณ
+เดย์เทรดไหนชนะต้นทุนขนาดนั้นได้
+
+โบรกที่**ไม่มี**ขั้นต่ำ (ข้อมูลปี 2026): SBITO, LIB, Z, KS, BLS, FSS, GLOBLEX,
+KINGSFORD, YUANTA, KKPS, CGSI, DAOLSEC, KTX
+
+ถ้าย้ายโบรกหรือได้เรตอื่น แก้ `COMM_RATE` / `MIN_COMM` ใน `config.py`
+แล้วตัวเลขต้นทุนทุกจุดจะอัปเดตตาม
+
+**2. รันแล้วไปทำงาน = stop loss ไม่ทำงานเอง**
+
+สคริปต์คำนวณจุดตัดขาดทุนให้ แต่ไม่มีใครกดขายให้คุณ วิธีใช้ที่ปลอดภัยคือ
+**วาง limit sell ที่ราคา TP ทันทีหลังซื้อ** แล้วกำหนดขนาดไม้เท่ากับเงินที่
+ยอมเสียได้ทั้งก้อน — บรรทัด `เสียมากสุด …฿` ในผลลัพธ์คือตัวเลขนั้น
+
+---
+
+## แหล่งข้อมูล
+
+| แหล่ง | ใช้ทำอะไร |
+| :-- | :-- |
+| [TradingView scanner](https://scanner.tradingview.com/) | ราคา + RSI/MACD/EMA/ATR ทุก timeframe ของ HSI, หุ้นไทย และ DR — ยิงครั้งเดียวได้ทั้งตลาด |
+| [thaidw.com](https://www.thaidw.com/) | ตาราง DW ฮั่งเส็ง พร้อม bid/ask, gearing, delta, theta, IV และราคา HSI futures สด |
+
+**ทำไมไม่ใช้ yfinance / SET API**
+
+- yfinance โดน Yahoo ตอบ `HTTP 429 Too Many Requests` หลังยิงไม่กี่สิบครั้ง
+  การสแกนหลายสิบตัวคูณหลาย timeframe จึงชนเพดานทุกรอบ
+- `set.or.th` และ `settrade.com` อยู่หลัง Imperva — endpoint JSON ตอบ 403
+  ให้ทุก client ที่ไม่ใช่เบราว์เซอร์จริง
+- TradingView ไม่มีข้อมูล DW (`SET:HSI28C2610A` → `totalCount 0`)
+  จึงต้องใช้ thaidw สำหรับก้อน A
+
+---
+
+## ก้อน A ทำงานอย่างไร
+
+แยกเป็น 2 คำถามที่ไม่เกี่ยวกัน และตอบตามลำดับ
+
+**1. ดัชนีไปทางไหน** — รวมคะแนนจาก 5m / 15m / 60m ถ่วงน้ำหนัก 0.25 / 0.45 / 0.30
+โดย 15m ได้น้ำหนักมากที่สุดเพราะช้าพอจะรอด spread ตอนเปิด และเร็วพอจะปิดในวัน
+ถ้า `|คะแนน| < 45` → ไม่เข้า
+
+**2. แล้วซื้อตัวไหน** — คัด DW ทั้ง 31 ตัวด้วยเกณฑ์ที่ทำให้ "เทรดไม่ได้จริง"
+
+| ตัด | เพราะ |
+| :-- | :-- |
+| ไม่มี bid | ซื้อได้แต่ขายไม่ออก |
+| เหลือ < 10 วัน | theta cliff |
+| spread > 8% | ค่าเข้าออกกินกำไรหมด |
+| งบไม่พอ 1 lot | DW ซื้อขั้นต่ำ 100 หน่วย |
+
+ที่เหลือเรียงด้วย `gearing / (1 + spread/2) − theta×1.5 − ส่วนที่ OTM เกิน 5%`
+
+**ตัวเลขที่ต้องดูให้เป็น: `BE จุด`** = ดัชนีต้องวิ่งกี่จุดถึงจะเสมอตัว
+เพราะซื้อที่ ask แล้วขายที่ bid แปลว่าจ่าย spread ไปตั้งแต่วินาทีแรก
+DW ที่ราคา 0.03/0.04 คือจ่าย 33% ทันที — ทายทางถูกก็ยังขาดทุน
+
+**ทำไมต้องมีผู้ออก 28 ด้วย ไม่ใช่แค่ 18** — ฝั่ง 18 มี DW แค่ 6 ตัว
+บางวันไม่มีตัวไหนผ่านเกณฑ์เลยแม้แต่ตัวเดียว โดยเฉพาะฝั่ง PUT
+การเปิดให้เห็นทั้ง 31 ตัวทำให้ยังมีของให้เลือกเมื่อสัญญาณมา
+
+**หมายเหตุ underlying** — DW ฮั่งเส็งในไทยอ้างอิง **HSI Futures (HSIc1)**
+ไม่ใช่ spot index ทั้งสองห่างกันหลายสิบจุดและ futures เทรดนอกเวลา cash market
+ผลลัพธ์จึงแสดงทั้งคู่
+
+---
+
+## เวลาที่ควรรัน (เวลาไทย)
+
+| เวลา | ทำอะไร |
+| :-- | :-- |
+| 08:35 | ก้อน A รอบเช้า (HKEX เปิด 09:30 HKT เผื่อ 5 นาทีให้ spread แคบลง) |
+| 10:15 | ก้อน B + C (SET เปิดมา ~25 นาที) |
+| 12:05 | ก้อน A รอบบ่าย (HKEX 13:00 HKT) |
+| 15:45 | ปิดสถานะเดย์เทรดทั้งหมด |
+
+---
+
+## บันทึกการเทรด
+
+ทุกคำแนะนำถูกเขียนต่อท้าย `journal.jsonl` (ไม่ขึ้น git) เพื่อให้ย้อนวัดได้จริง
+ว่าสัญญาณทำเงินหรือเปล่า แทนการเชื่อความทรงจำ ปิดด้วย `--no-journal`
+
+---
+
+## โครงสร้าง
+
+```
+run.py                    CLI + การแสดงผล
+selftest.py               ตรวจว่าทุกบรรทัดพอดีกรอบ (รันหลังแก้คอลัมน์)
+trader/
+├── config.py             งบ เกณฑ์ เวลา — แก้ที่นี่ที่เดียว
+├── sizing.py             จำนวน lot, ค่าธรรมเนียม, spread, ตารางช่องราคา
+├── journal.py            บันทึก jsonl
+├── cache.py              ประวัติราคาสำหรับ sparkline
+├── graph.py              เกจ แถบ ladder กรอบ — คำนวณความกว้างแบบรู้จักสระไทย
+├── ui.py                 สีและการจัดรูปแบบ
+├── feeds/
+│   ├── tv.py             TradingView scanner
+│   └── thaidw.py         ตาราง DW + HSI futures
+└── buckets/
+    ├── dw_hsi.py         ก้อน A
+    ├── cheap.py          ก้อน B
+    └── dr.py             ก้อน C
 ```
 
 ---
 
-## 🚀 Usage
-
-### 1. Single Snapshot Analysis (Default 5-minute primary timeframe)
-```bash
-python3 hsi_analyzer.py
-```
-
-### 2. Live Auto-Refresh Dashboard (Refreshes every 15 seconds)
-```bash
-python3 hsi_analyzer.py --live
-```
-
-### 3. Custom Refresh Rate (e.g., every 5 seconds)
-```bash
-python3 hsi_analyzer.py --live --refresh 5
-```
-
-### 4. Fast Scalping Mode (1-minute primary timeframe)
-```bash
-python3 hsi_analyzer.py --timeframe 1m
-```
-
-### 5. Swing Day Trading Mode (15-minute primary timeframe)
-```bash
-python3 hsi_analyzer.py --timeframe 15m
-```
-
-### 6. View Recent Candle History Table
-```bash
-python3 hsi_analyzer.py --history 5
-```
-
----
-
-## 📊 Indicator & DW Signal Interpretation
-
-| Signal | Market Condition | RSI (14) | MACD | Recommended DW Action |
-| :--- | :--- | :--- | :--- | :--- |
-| 🟢 **STRONG CALL** | Price > EMA9 > EMA21 | 55 - 70 (Rising) | MACD > Signal & Hist > 0 | **Buy Call DW** on EMA9 dip or R1 breakout |
-| 🟢 **CALL BIAS** | Price > EMA21 | 50 - 60 | MACD > Signal | Wait for 5m pullback to EMA9/21 to enter Call |
-| 🟡 **STANDBY / CHOP** | Price whipsawing around EMA21 | 45 - 55 (Flat) | MACD ~ Signal | **NO TRADE** — avoid DW Theta (time decay) |
-| 🔴 **PUT BIAS** | Price < EMA21 | 40 - 50 | MACD < Signal | Wait for 5m rebound to EMA9/21 rejection to enter Put |
-| 🔴 **STRONG PUT** | Price < EMA9 < EMA21 | 30 - 45 (Falling) | MACD < Signal & Hist < 0 | **Buy Put DW** on EMA9 rejection or S1 breakdown |
-
----
-
-## ⏰ Hong Kong Stock Exchange (HKEX) Trading Hours
-
-| Session | Hong Kong Time (HKT, UTC+8) | Bangkok Time (BKK, UTC+7) | Day Trading Note |
-| :--- | :--- | :--- | :--- |
-| **Morning Open** | 09:30 - 12:00 | 08:30 - 11:00 | Highest volatility & DW volume |
-| **Lunch Break** | 12:00 - 13:00 | 11:00 - 12:00 | Market paused |
-| **Afternoon Session** | 13:00 - 16:00 | 12:00 - 15:00 | Trend continuation / Afternoon breakout |
-| **Closing Auction** | 16:00 - 16:10 | 15:00 - 15:10 | Day traders should close positions before close |
-
----
-
-## 💡 Pro Tips for HSI DW Traders
-
-1. **Select High Sensitivity DWs**: Look for DWs with Effective Gearing of 8x–15x and Sensitivity near 1.0 (moves 1 tick per 20–30 HSI points).
-2. **Never Hold DWs in Chop**: When the script displays `STANDBY / NO TRADE`, staying in cash preserves capital from Theta decay.
-3. **Respect Stop Losses**: Always set stop loss at the indicated support/resistance or ATR level.
-4. **Close Intraday**: Avoid holding HSI DW overnight to eliminate overnight gap risk from global markets.
+ตัวเลขทั้งหมดเป็นข้อมูลประกอบการตัดสินใจ ไม่ใช่คำแนะนำการลงทุน
