@@ -88,8 +88,12 @@ def scan(budget: float = None, risk_thb: float = None, cash: float = None,
         if not reason:
             plan = _plan_prices(m)
             m.update(sizing.size_by_risk(close, plan['sl'], risk_thb, cap=cap))
+            cost = _cost_pct(m)
             if m['lots'] < 1:
                 reason = _no_lot_reason(m, plan, risk_thb, cap)
+            elif plan['tp_pct'] < cost * config.MIN_EDGE_MULTIPLE:
+                reason = (f"เป้า +{plan['tp_pct']:.1f}% แต่ค่าเข้าออก {cost:.2f}% — "
+                          f"ต้องได้อย่างน้อย {cost * config.MIN_EDGE_MULTIPLE:.1f}%")
             else:
                 plan['max_loss_thb'] = m['risk_thb']
                 plan['risk_pct_account'] = m['risk_pct']
@@ -106,6 +110,13 @@ def scan(budget: float = None, risk_thb: float = None, cash: float = None,
     passed, dupes = _dedupe_underlying(passed)
     return {'passed': passed, 'rejected': rejected, 'dupes': dupes,
             'universe': len(rows) - nvdr, 'nvdr_filtered': nvdr, 'cash': cap}
+
+
+def _cost_pct(m: dict) -> float:
+    """Commission plus one tick: in and out inside a session, the grid is paid."""
+    fee = m.get('fee_pct')
+    fee = 0.0 if fee is None or fee != fee else fee
+    return fee + m['tick_pct']
 
 
 def _no_lot_reason(m: dict, plan: dict, risk_thb: float, cap: float) -> str:

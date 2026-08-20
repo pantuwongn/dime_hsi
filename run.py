@@ -12,7 +12,8 @@ Standard library only: no pandas, no yfinance, no rich to install.
 import argparse
 import sys
 
-from trader import cache, config, graph, journal, risk, sizing, ui
+from trader import (cache, config, graph, journal, marks, review, risk,
+                    sizing, ui)
 from trader.feeds import tv
 from trader.buckets import dw_hsi, cheap, dr
 from trader.graph import (bar, big_badge, pad, panel, rr_bar, rsi_gauge,
@@ -67,10 +68,16 @@ def show_dw(record: bool) -> None:
     lines = _index_block(sig, fut)
 
     if sig['side'] is None:
-        lines += [''] + big_badge('wait', f"สัญญาณ {sig['composite']:+.0f} "
-                                          f"(ต้องถึง ±{config.DW_SIGNAL_ENTER})")
-        lines += ['', ui.c('   DW เสีย theta ทุกวัน — วันที่สัญญาณไม่ชัด การอยู่เฉยคือกำไร',
-                           'yellow')]
+        veto = sig.get('vetoed_by_align')
+        if veto:
+            tail = (f"สัญญาณ {sig['composite']:+.0f} ผ่านเกณฑ์ "
+                    f"แต่ EMA 15m ยัง {veto}")
+            why = '   คะแนนพุ่งตอนราคายังพันกับเส้นค่าเฉลี่ยตัวเอง — spread จ่ายจริง แต่ move ไม่มา'
+        else:
+            tail = f"สัญญาณ {sig['composite']:+.0f} (ต้องถึง ±{config.DW_SIGNAL_ENTER})"
+            why = '   DW เสีย theta ทุกวัน — วันที่สัญญาณไม่ชัด การอยู่เฉยคือกำไร'
+        lines += [''] + big_badge('wait', tail)
+        lines += ['', ui.c(why, 'yellow')]
         _panel('ก้อน A · HSI DW · เดย์เทรด', lines, 'bright_yellow')
         if record:
             journal.record('dw', {'action': 'NO_TRADE', 'composite': sig['composite'],
@@ -343,6 +350,51 @@ def _entry_block(m: dict, p: dict, note: str = '') -> list:
 
 # ------------------------------------------------------------------------------
 
+_POS_W = [13, 6, 8, 8, 9, 9, 5, 7, 7]
+_POS_H = ['symbol', 'ก้อน', 'ซื้อ', 'ตอนนี้', 'กำไร%', 'กำไร฿', 'วัน', 'SL', 'TP']
+_fit(_POS_W, 'ตารางสถานะ')
+
+
+def show_positions(st: dict) -> None:
+    """What is already on the table, priced at what you could exit for."""
+    if not st['open']:
+        return
+    try:
+        held = marks.mark(st['open'])
+    except Exception as e:                      # a dead feed must not hide them
+        held = [dict(p, now=None, pnl_pct=None, pnl_thb=None, days_held=0,
+                     alert=f'ดึงราคาไม่ได้: {e}') for p in st['open']]
+
+    lines = [ui.c(_row(_POS_H, _POS_W), 'bold')]
+    total = 0.0
+    for m in held:
+        pnl = m.get('pnl_thb')
+        total += pnl or 0.0
+        tone = ('bright_green' if (pnl or 0) > 0
+                else 'bright_red' if (pnl or 0) < 0 else 'dim')
+        lines.append(_row([
+            ui.c(m['symbol'], 'bold'), m.get('bucket', '?'),
+            f"{float(m.get('entry') or 0):.2f}",
+            ui.fmt(m.get('now')), 
+            ui.c(ui.fmt(m.get('pnl_pct'), 1), tone),
+            ui.c(ui.fmt(pnl, 0), tone),
+            m.get('days_held', 0),
+            f"{float(m.get('sl') or 0):.2f}", f"{float(m.get('tp') or 0):.2f}",
+        ], _POS_W))
+    for m in held:
+        if m.get('alert'):
+            hot = m['hit_sl'] or m['hit_tp'] or m['stale']
+            lines.append('  ' + ui.c(f"{'▲' if hot else '·'} {m['symbol']}  "
+                                     f"{m['alert']}", 'bright_yellow' if hot else 'dim'))
+    tone = 'bright_green' if total > 0 else 'bright_red' if total < 0 else 'dim'
+    lines.append('')
+    lines.append('  ' + pad('รวมยังไม่ปิด', 18)
+                 + ui.c(f"{total:+,.0f}฿", 'bold', tone)
+                 + ui.c(f"   ทุนที่จมอยู่ {sum(float(p.get('cost') or 0) for p in held):,.0f}฿",
+                        'dim'))
+    _panel('สถานะที่ถืออยู่', lines, 'cyan')
+
+
 def header(st: dict = None) -> None:
     now = journal.now_bkk()
     total = config.BUDGET_TOTAL
@@ -374,6 +426,76 @@ def header(st: dict = None) -> None:
         lines.append('  ' + ui.c(f"⚠ ค่าคอมขั้นต่ำ {config.MIN_COMM:.0f}฿/วัน "
                                  '— ไม้เล็กจะโดนค่าธรรมเนียมกิน', 'yellow'))
     _panel('แผนเทรดวันนี้', lines, 'red' if st['blocked'] else 'magenta')
+
+
+_REV_W = [8, 5, 5, 7, 10, 10, 11, 10, 9]
+_REV_H = ['ก้อน', 'ไม้', 'ชนะ', '%ชนะ', 'ได้เฉลี่ย', 'เสียเฉลี่ย', 'ค่าธรรมเนียม',
+          'สุทธิ฿', 'ต่อไม้฿']
+_fit(_REV_W, 'ตารางสรุปผล')
+
+_BUCKET_LABEL = {'dw': 'A · DW', 'cheap': 'B · หุ้น', 'dr': 'C · DR'}
+
+
+def cmd_review() -> int:
+    """
+    Read the journal back. Every threshold in config.py is a guess until this
+    says otherwise, and the point of measuring is to be willing to close a
+    bucket that does not earn — which is why the verdict is blunt.
+    """
+    s = review.summarise()
+    if not s['trades'] and not s['signals']:
+        ui.fail('journal ยังว่าง — ต้อง --took ตอนซื้อ และ --close ตอนขาย ถึงจะวัดได้')
+        return 1
+
+    lines = ['  ' + ui.c(f"ปิดไปแล้ว {s['overall']['n']} ไม้", 'bold')
+             + ui.c(f"   สัญญาณ {s['signals']} ครั้ง เข้าจริง {s['entered']} ครั้ง"
+                    + (f" ({s['taken_pct']:.0f}%)" if s['taken_pct'] else '')
+                    + f"   เก็บข้อมูลมา {s['days']} วัน", 'dim'),
+             '']
+    lines.append(ui.c(_row(_REV_H, _REV_W), 'bold'))
+    for b in ('dw', 'cheap', 'dr'):
+        st = s['by_bucket'][b]
+        tone = ('bright_green' if st['net'] > 0
+                else 'bright_red' if st['net'] < 0 else 'dim')
+        lines.append(_row([
+            _BUCKET_LABEL[b], st['n'], st['wins'],
+            ui.fmt(st['hit_rate'], 0) + ('%' if st['hit_rate'] is not None else ''),
+            ui.fmt(st['avg_win'], 0), ui.fmt(st['avg_loss'], 0),
+            ui.fmt(st['fees'], 0),
+            ui.c(f"{st['net']:+,.0f}", tone),
+            ui.c(f"{st['expectancy']:+,.0f}", tone)], _REV_W))
+
+    lines += ['', graph.divider(W, 'ควรทำอะไรต่อ')]
+    for b in ('dw', 'cheap', 'dr'):
+        st = s['by_bucket'][b]
+        tone = ('dim' if st['n'] < review.MIN_SAMPLE
+                else 'bright_green' if st['expectancy'] > 0 else 'bright_red')
+        lines.append('  ' + pad(_BUCKET_LABEL[b], 10) + ui.c(st['verdict'], tone))
+
+    o = s['overall']
+    if o['n']:
+        tone = 'bright_green' if o['net'] > 0 else 'bright_red'
+        lines += ['', '  ' + pad('รวมทุกก้อน', 18)
+                  + ui.c(f"{o['net']:+,.0f}฿", 'bold', tone)
+                  + ui.c(f"   ({o['expectancy']:+,.0f}฿/ไม้ · ชนะ "
+                         f"{ui.fmt(o['hit_rate'], 0)}% · ค่าธรรมเนียมไปแล้ว "
+                         f"{o['fees']:,.0f}฿)", 'dim')]
+        lines.append('  ' + ui.c(f"ดีสุด {o['best']:+,.0f}฿ · แย่สุด {o['worst']:+,.0f}฿ "
+                                 f"· เทียบทุน {config.BUDGET_TOTAL:,.0f}฿ = "
+                                 f"{o['net'] / config.BUDGET_TOTAL * 100:+.1f}%", 'dim'))
+
+    if s['trades']:
+        lines += ['', graph.divider(W, 'ไม้ล่าสุด')]
+        for t in s['trades'][-6:]:
+            tone = 'bright_green' if t['pnl'] > 0 else 'bright_red'
+            lines.append('  ' + pad(str(t['symbol']), 14)
+                         + pad(_BUCKET_LABEL.get(t['bucket'], '?'), 9)
+                         + pad(f"{t['entry']:.2f} → {t['exit']:.2f}", 16)
+                         + ui.c(pad(f"{t['pnl']:+,.0f}฿", 10, '>'), tone)
+                         + ui.c(f"   {t['pnl_pct']:+.1f}%   ถือ {t['days']} วัน", 'dim'))
+
+    _panel('ผลจริงจาก journal', lines, 'magenta')
+    return 0
 
 
 def cmd_took(symbol: str, price: float = None) -> int:
@@ -474,6 +596,8 @@ def main() -> int:
     ap.add_argument('--price', type=float, help='ราคาที่ซื้อ/ขายได้จริง')
     ap.add_argument('--status', action='store_true',
                     help='ดูโควตาความเสี่ยงวันนี้กับสถานะที่ถืออยู่ ไม่ต้องสแกนตลาด')
+    ap.add_argument('--review', action='store_true',
+                    help='สรุปจาก journal ว่าก้อนไหนทำเงินจริง ก้อนไหนควรตัดทิ้ง')
     ap.add_argument('--force', action='store_true',
                     help='สแกนต่อแม้ชนเบรกเกอร์ประจำวันแล้ว')
     args = ap.parse_args()
@@ -482,6 +606,8 @@ def main() -> int:
     if args.color:
         ui.force_color(True)
 
+    if args.review:
+        return cmd_review()
     if args.took:
         return cmd_took(args.took, args.price)
     if args.close_sym:
@@ -499,6 +625,7 @@ def main() -> int:
     st = risk.state()
     print()
     header(st)
+    show_positions(st)
     if args.status:
         return 0
 

@@ -1,8 +1,68 @@
 """Assemble the full HTML page from a collected brief."""
 
-from trader import config, risk
+from trader import config, review, risk
 from .html import (CSS, badge, cut_list, e, gauge, ladder, meter, n, rr_bar,
                    table)
+
+
+def _held_card(held: list) -> str:
+    """What is already on the table, at the price you could exit for."""
+    if not held:
+        return ''
+    rows, total = [], 0.0
+    for m in held:
+        pnl = m.get('pnl_thb')
+        total += pnl or 0.0
+        colour = ('var(--up)' if (pnl or 0) > 0
+                  else 'var(--down)' if (pnl or 0) < 0 else 'var(--muted)')
+        rows.append([
+            f'<b>{e(m["symbol"])}</b>', e(m.get('bucket', '?')),
+            f'{float(m.get("entry") or 0):.2f}', n(m.get('now')),
+            f'<span style="color:{colour}">{n(m.get("pnl_pct"), 1)}%</span>',
+            f'<span style="color:{colour}">{n(pnl, 0)}</span>',
+            m.get('days_held', 0),
+            f'{float(m.get("sl") or 0):.2f}', f'{float(m.get("tp") or 0):.2f}'])
+    alerts = ''.join(
+        f'<li><code>{e(m["symbol"])}</code><span>{e(m["alert"])}</span></li>'
+        for m in held if m.get('alert'))
+    colour = 'var(--up)' if total > 0 else 'var(--down)' if total < 0 else 'var(--muted)'
+    return ('<section class="card"><h2>สถานะที่ถืออยู่ '
+            f'<small>ยังไม่ปิด · ราคาที่ขายออกได้</small></h2>'
+            + table(['', 'ก้อน', 'ซื้อ', 'ตอนนี้', 'กำไร%', 'กำไร฿', 'วัน', 'SL', 'TP'],
+                    rows, pick_first=False)
+            + (f'<ul class="cut">{alerts}</ul>' if alerts else '')
+            + f'<dl class="rows" style="margin-top:12px"><dt>รวมยังไม่ปิด</dt>'
+              f'<dd style="color:{colour}"><b>{n(total, 0)}฿</b></dd></dl>'
+            + '</section>')
+
+
+def _score_card(s: dict) -> str:
+    """The scoreboard. Guessed thresholds stay guesses until this is read."""
+    if not s or not s['overall']['n']:
+        return ''
+    label = {'dw': 'A · DW', 'cheap': 'B · หุ้น', 'dr': 'C · DR'}
+    rows = []
+    for b in ('dw', 'cheap', 'dr'):
+        st = s['by_bucket'][b]
+        colour = ('var(--up)' if st['net'] > 0
+                  else 'var(--down)' if st['net'] < 0 else 'var(--muted)')
+        rows.append([f'<b>{label[b]}</b>', st['n'], st['wins'],
+                     (f"{n(st['hit_rate'], 0)}%" if st['hit_rate'] is not None else '—'),
+                     n(st['fees'], 0),
+                     f'<span style="color:{colour}">{n(st["net"], 0)}</span>',
+                     f'<span style="color:{colour}">{n(st["expectancy"], 0)}</span>',
+                     f'<span style="opacity:.75">{e(st["verdict"])}</span>'])
+    o = s['overall']
+    colour = 'var(--up)' if o['net'] > 0 else 'var(--down)'
+    return ('<section class="card"><h2>ผลจริงจาก journal '
+            f'<small>ปิดไปแล้ว {o["n"]} ไม้ · เก็บมา {s["days"]} วัน</small></h2>'
+            + table(['ก้อน', 'ไม้', 'ชนะ', '%ชนะ', 'ค่าธรรมเนียม', 'สุทธิ฿',
+                     'ต่อไม้฿', 'ควรทำอะไรต่อ'], rows, pick_first=False)
+            + f'<dl class="rows" style="margin-top:12px"><dt>รวมทุกก้อน</dt>'
+              f'<dd style="color:{colour}"><b>{n(o["net"], 0)}฿</b> '
+              f'<span style="opacity:.7">({n(o["expectancy"], 0)}฿/ไม้ · '
+              f'ค่าธรรมเนียมไปแล้ว {n(o["fees"], 0)}฿)</span></dd></dl>'
+            + '</section>')
 
 
 def _dw_card(d: dict) -> str:
@@ -182,9 +242,11 @@ def render(brief: dict) -> str:
 {holding}
 {stop}
 {errors}
+{_held_card(brief.get('held') or [])}
 {_dw_card(brief.get('dw'))}
 {_swing_card(brief.get('cheap'))}
 {_dr_card(brief.get('dr'))}
+{_score_card(brief.get('review'))}
 <footer>ข้อมูลจาก TradingView และ thaidw.com · หน้านี้คำนวณสดตอนเปิด<br>
 ตัวเลขทั้งหมดเป็นข้อมูลประกอบการตัดสินใจ ไม่ใช่คำแนะนำการลงทุน</footer>
 </div></body></html>"""

@@ -10,7 +10,7 @@ sequence spends the budget on waiting.
 
 from concurrent.futures import ThreadPoolExecutor
 
-from trader import cache, config, risk
+from trader import cache, config, marks, review, risk
 from trader.buckets import cheap, dr, dw_hsi
 from trader.feeds import thaidw
 from trader.journal import now_bkk
@@ -70,16 +70,29 @@ def _dr() -> dict:
 def collect(buckets=('dw', 'cheap', 'dr')) -> dict:
     """Returns {bucket: result} plus an 'errors' map for whatever failed."""
     jobs = {'dw': _dw, 'cheap': _cheap, 'dr': _dr}
+    st = risk.state()
     out = {'generated_at': now_bkk(), 'errors': {},
            'budget': dict(config.ALLOC), 'total': config.BUDGET_TOTAL,
-           'risk': risk.state()}
+           'risk': st, 'held': [], 'review': review.summarise()}
 
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        futures = {name: pool.submit(jobs[name]) for name in buckets}
+    # Marking open positions is a fourth independent call, so it rides along
+    # in the same pool rather than adding its latency to the request.
+    jobs['_held'] = lambda: marks.mark(st['open']) if st['open'] else []
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {name: pool.submit(jobs[name])
+                   for name in tuple(buckets) + ('_held',)}
         for name, fut in futures.items():
             try:
-                out[name] = fut.result()
+                result = fut.result()
             except Exception as e:                    # a dead feed is reportable
+                if name == '_held':
+                    continue
                 out[name] = None
                 out['errors'][name] = f'{type(e).__name__}: {e}'
+                continue
+            if name == '_held':
+                out['held'] = result
+            else:
+                out[name] = result
     return out

@@ -81,12 +81,25 @@ def index_signal() -> dict:
     else:
         side, bias = None, 'CHOP / NO TRADE'
 
+    # The EMA stack was computed and then only printed. As a gate it costs
+    # nothing — no extra request, no extra column — and it throws out the
+    # score that spiked while price is still tangled in its own averages,
+    # which is the trade whose spread you pay for and whose move never comes.
+    vetoed = None
+    if side and config.DW_REQUIRE_ALIGN:
+        want = 'up' if side == 'C' else 'down'
+        if aligned != want:
+            vetoed = aligned or 'ไม่รู้'
+            side = None
+            bias = f'สัญญาณ{"ขึ้น" if want == "up" else "ลง"} แต่ EMA ยังไม่เรียง ({vetoed})'
+
     return {
         'close': close, 'change': num(r, 'change'), 'atr': atr,
         'ema9': ema9, 'ema21': ema21, 'ema50': num(r, 'EMA50|15'),
         'high': num(r, 'high'), 'low': num(r, 'low'),
         'composite': composite, 'side': side, 'bias': bias,
-        'aligned': aligned, 'per_tf': parts, 'missing_tf': missing,
+        'aligned': aligned, 'vetoed_by_align': vetoed,
+        'per_tf': parts, 'missing_tf': missing,
     }
 
 
@@ -173,6 +186,24 @@ def _finish_plan(m: dict, pr: dict) -> dict:
     return plan
 
 
+def _edge_reason(m: dict, pr: dict):
+    """
+    Reject a target that does not clear its own round trip by enough to be
+    worth the ticket. DW_MAX_SPREAD is an absolute bar — 8% of what? — while
+    this compares the cost to what the trade is actually reaching for.
+    """
+    gross = (pr['tp_price'] - pr['entry']) / pr['entry'] * 100.0
+    fee = m.get('fee_pct')
+    fee = 0.0 if fee is None or fee != fee else fee
+    spread = m.get('spread_pct')
+    spread = 0.0 if spread is None or spread != spread else spread
+    cost = spread + fee
+    if cost > 0 and gross < cost * config.MIN_EDGE_MULTIPLE:
+        return (f"เป้า +{gross:.0f}% แต่ค่าเข้าออก {cost:.1f}% — "
+                f"ต้องได้อย่างน้อย {cost * config.MIN_EDGE_MULTIPLE:.0f}%")
+    return None
+
+
 def _no_lot_reason(w: dict, pr: dict, risk_thb: float, budget: float) -> str:
     """'Nothing fits' has two different causes and two different answers."""
     per_lot_cost = w['ask'] * config.BOARD_LOT
@@ -229,6 +260,8 @@ def screen_warrants(side: str, signal: dict, budget: float = None,
                                              risk_thb, cap=budget))
                 if m['lots'] < 1:
                     reason = _no_lot_reason(w, prices, risk_thb, budget)
+                else:
+                    reason = _edge_reason(m, prices)
 
         if reason:
             m['reject'] = reason

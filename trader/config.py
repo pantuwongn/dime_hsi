@@ -37,6 +37,13 @@ RISK_PER_TRADE   = 0.015   # of BUDGET_TOTAL, between entry and stop
 MAX_DAILY_LOSS   = 0.04    # realised + still-open risk that ends the day
 MAX_DAILY_TRADES = 2       # confirmed entries per day, all buckets together
 
+# Costs are paid per trade, so trading often is itself a strategy — a losing
+# one here. A 6% DW spread on a 1,200 THB ticket is 72 THB each way; taken
+# daily that is 1,440 THB a month, 29% of the whole account, before being
+# right or wrong about anything. So a setup has to promise a multiple of what
+# it costs, or it is not a setup, it is a fee.
+MIN_EDGE_MULTIPLE = 3.0    # target must be N x the round trip it has to clear
+
 
 def risk_thb() -> float:
     """THB put at risk between entry and stop on a single position."""
@@ -68,7 +75,8 @@ DW_ISSUERS       = ('18', '28')
 DW_MAX_SPREAD    = 8.0    # % of ask. Above this the round trip eats the edge
 DW_MIN_DAYS      = 10     # calendar days to last trading day (theta cliff)
 DW_SOFT_MONEY    = 5.0    # moneyness % beyond which we start penalising
-DW_SIGNAL_ENTER  = 45     # |composite| needed to take a trade at all
+DW_SIGNAL_ENTER  = 60     # |composite| needed to take a trade at all
+DW_REQUIRE_ALIGN = True   # the 15m EMA stack has to agree with the score
 DW_TP_ATR        = 2.5    # take profit at N x ATR(15m) — a session move, not a scalp
 DW_SL_ATR        = 1.5    # stop at N x ATR(15m), floored above the spread
 
