@@ -13,7 +13,7 @@ import argparse
 import sys
 
 from trader import (cache, config, graph, journal, marks, review, risk,
-                    sizing, ui)
+                    session, sizing, ui)
 from trader.feeds import tv
 from trader.buckets import dw_hsi, cheap, dr
 from trader.graph import (bar, big_badge, pad, panel, rr_bar, rsi_gauge,
@@ -65,7 +65,7 @@ def show_dw(record: bool) -> None:
         return
 
     cache.append('HSI', sig['close'])
-    lines = _index_block(sig, fut)
+    lines = _stale_line('dw') + _index_block(sig, fut)
 
     if sig['side'] is None:
         veto = sig.get('vetoed_by_align')
@@ -227,7 +227,8 @@ def show_cheap(record: bool) -> None:
         _panel('ก้อน B · หุ้นไทยราคาต่ำ', [ui.c(f'✗ ดึงข้อมูลไม่ได้: {e}', 'bright_red')], 'red')
         return
 
-    lines = ['  ' + ui.c(f"ผ่านด่านสภาพคล่อง {res['universe']} ตัว", 'bold')
+    lines = _stale_line('cheap')
+    lines += ['  ' + ui.c(f"ผ่านด่านสภาพคล่อง {res['universe']} ตัว", 'bold')
              + ui.c(f"  จาก ~430 ตัวที่ราคา < {config.CHEAP_MAX_PRICE:.0f}฿ "
                     f"(ต้องซื้อขาย > {config.CHEAP_MIN_VALUE / 1e6:.0f} ลบ./วัน)", 'dim')]
     lines += _cash_line(held, cash, config.ALLOC['cheap'])
@@ -283,7 +284,8 @@ def show_dr(record: bool) -> None:
         _panel('ก้อน C · DR', [ui.c(f'✗ ดึงข้อมูลไม่ได้: {e}', 'bright_red')], 'red')
         return
 
-    lines = ['  ' + ui.c(f"DR ที่มีสภาพคล่อง {res['universe']} ตัว", 'bold')
+    lines = _stale_line('dr')
+    lines += ['  ' + ui.c(f"DR ที่มีสภาพคล่อง {res['universe']} ตัว", 'bold')
              + ui.c(f"  กรอง NVDR ออก {res['nvdr_filtered']} รายการ", 'dim')]
     lines += _cash_line(held, cash, config.ALLOC['dr'])
     if res.get('dupes'):
@@ -316,6 +318,12 @@ def show_dr(record: bool) -> None:
                               'cost': m['cost'], 'tp': m['plan']['tp'],
                               'sl': m['plan']['sl'],
                               'risk_thb': m['plan']['max_loss_thb']})
+
+
+def _stale_line(bucket: str) -> list:
+    """Say it in the panel too — the header scrolls off, the badge does not."""
+    note = session.bucket_note(bucket)
+    return ['  ' + ui.c(f'⚠  {note}', 'bright_yellow'), ''] if note else []
 
 
 def _exclude(bucket: str, held: list) -> dict:
@@ -422,6 +430,9 @@ def header(st: dict = None) -> None:
                                    f"@ {float(pos.get('entry') or 0):.2f} "
                                    f"· SL {float(pos.get('sl') or 0):.2f} "
                                    f"· เสี่ยง {float(pos.get('risk_thb') or 0):,.0f}฿", 'dim'))
+    sess = session.state(now)
+    if sess['note']:
+        lines.append('  ' + ui.c(f"⚠  {sess['note']}", 'bright_yellow'))
     if config.MIN_COMM > 0:
         lines.append('  ' + ui.c(f"⚠ ค่าคอมขั้นต่ำ {config.MIN_COMM:.0f}฿/วัน "
                                  '— ไม้เล็กจะโดนค่าธรรมเนียมกิน', 'yellow'))

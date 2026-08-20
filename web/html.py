@@ -97,6 +97,8 @@ summary{cursor:pointer;color:var(--muted);font-size:13px}
 .cut code{font-family:var(--mono);min-width:104px;color:var(--ink);opacity:.75}
 .err{background:var(--down-bg);color:var(--down);border-radius:10px;
   padding:12px 14px;font-size:13.5px;margin-bottom:14px}
+.stale{background:var(--flat-bg);color:var(--flat);border-radius:10px;
+  padding:12px 14px;font-size:13.5px;margin-bottom:14px}
 footer{color:var(--muted);font-size:12px;text-align:center;margin-top:26px;
   line-height:1.7}
 """

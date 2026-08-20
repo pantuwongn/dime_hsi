@@ -1,6 +1,6 @@
 """Assemble the full HTML page from a collected brief."""
 
-from trader import config, review, risk
+from trader import config, review, risk, session
 from .html import (CSS, badge, cut_list, e, gauge, ladder, meter, n, rr_bar,
                    table)
 
@@ -211,6 +211,12 @@ def render(brief: dict) -> str:
         f'<div class="err">ก้อน {e(k)} ดึงข้อมูลไม่ได้ — {e(v)}</div>'
         for k, v in brief['errors'].items())
 
+    sess = brief.get('session') or session.state()
+    # The page is cached for 45s and reachable from a phone at any hour, so
+    # "this is not live" has to be on the page, not implied by the clock.
+    stale = (f'<div class="stale">⚠ {e(sess["note"])}</div>'
+             if sess['note'] else '')
+
     st = brief.get('risk') or risk.state()
     # The web view still shows the market when the day is spent — it is a
     # glance from a phone, not an order slip — but it says so first and loudly.
@@ -238,6 +244,7 @@ def render(brief: dict) -> str:
 <header><h1>แผนเทรดวันนี้</h1>
 <span class="stamp">{ts:%d/%m/%Y} · {ts:%H:%M} น. (กรุงเทพ)</span></header>
 <div class="alloc"><span>ทุนรวม <b>{brief['total']:,.0f}฿</b></span>{alloc}</div>
+{stale}
 {quota}
 {holding}
 {stop}

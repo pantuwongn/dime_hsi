@@ -10,7 +10,7 @@ sequence spends the budget on waiting.
 
 from concurrent.futures import ThreadPoolExecutor
 
-from trader import cache, config, marks, review, risk
+from trader import cache, config, marks, review, risk, session
 from trader.buckets import cheap, dr, dw_hsi
 from trader.feeds import thaidw
 from trader.journal import now_bkk
@@ -73,7 +73,8 @@ def collect(buckets=('dw', 'cheap', 'dr')) -> dict:
     st = risk.state()
     out = {'generated_at': now_bkk(), 'errors': {},
            'budget': dict(config.ALLOC), 'total': config.BUDGET_TOTAL,
-           'risk': st, 'held': [], 'review': review.summarise()}
+           'risk': st, 'held': [], 'review': review.summarise(),
+           'session': session.state()}
 
     # Marking open positions is a fourth independent call, so it rides along
     # in the same pool rather than adding its latency to the request.

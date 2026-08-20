@@ -9,9 +9,8 @@ non-browser clients, so this is the feed the DW bucket depends on.
 
 import json
 import urllib.request
-import urllib.error
 
-from .tv import FeedError
+from .net import FeedError, fetch
 
 _BASE = 'https://www.thaidw.com/apimqth/'
 _HEADERS = {
@@ -21,15 +20,13 @@ _HEADERS = {
 }
 
 
-def _get(path: str, timeout: int = 30) -> dict:
-    req = urllib.request.Request(_BASE + path, headers=_HEADERS)
-    try:
+def _get(path: str) -> dict:
+    def attempt(timeout):
+        req = urllib.request.Request(_BASE + path, headers=_HEADERS)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode('utf-8'))
-    except urllib.error.HTTPError as e:
-        raise FeedError(f'thaidw HTTP {e.code}: {e.reason}') from e
-    except Exception as e:
-        raise FeedError(f'thaidw unreachable: {e}') from e
+
+    return fetch(attempt, 'thaidw')
 
 
 def num(value, default=float('nan')) -> float:

@@ -12,7 +12,8 @@ No suffix == daily.
 
 import json
 import urllib.request
-import urllib.error
+
+from .net import FeedError, fetch          # noqa: F401  (tv.FeedError is public)
 
 _URL = 'https://scanner.tradingview.com/{market}/scan'
 _HEADERS = {
@@ -24,21 +25,16 @@ _HEADERS = {
 }
 
 
-class FeedError(RuntimeError):
-    """Raised when a feed cannot be trusted — never swallowed silently."""
-
-
-def _post(market: str, payload: dict, timeout: int = 30) -> dict:
+def _post(market: str, payload: dict) -> dict:
     body = json.dumps(payload).encode('utf-8')
-    req = urllib.request.Request(_URL.format(market=market), data=body,
-                                 headers=_HEADERS, method='POST')
-    try:
+
+    def attempt(timeout):
+        req = urllib.request.Request(_URL.format(market=market), data=body,
+                                     headers=_HEADERS, method='POST')
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode('utf-8'))
-    except urllib.error.HTTPError as e:
-        raise FeedError(f'TradingView {market} HTTP {e.code}: {e.reason}') from e
-    except Exception as e:
-        raise FeedError(f'TradingView {market} unreachable: {e}') from e
+
+    return fetch(attempt, f'TradingView {market}')
 
 
 def _rows(raw: dict, columns: list) -> list:

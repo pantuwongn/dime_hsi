@@ -193,6 +193,78 @@ check('DR ที่เพิ่งโดน SL วันนี้ถูกกั
 
 
 # ------------------------------------------------------------------------------
+print('\nsession — รู้ว่าตลาดเปิดอยู่หรือเปล่า')
+
+from datetime import datetime, timedelta, timezone                # noqa: E402
+from trader import session                                        # noqa: E402
+
+BKK = timezone(timedelta(hours=7))
+
+
+def at(text):
+    return datetime.strptime(text, '%Y-%m-%d %H:%M').replace(tzinfo=BKK)
+
+
+check('อังคาร 10:30 เปิดทั้งคู่', session.state(at('2026-08-18 10:30'))['live'], True)
+check('อังคาร 09:00 SET ยังไม่เปิด', session.is_open('set', at('2026-08-18 09:00')), False)
+check('  แต่ HKEX เปิดแล้ว', session.is_open('hkex', at('2026-08-18 09:00')), True)
+check('พักเที่ยง SET 13:00 ปิด', session.is_open('set', at('2026-08-18 13:00')), False)
+check('15:30 HKEX ปิดแล้ว', session.is_open('hkex', at('2026-08-18 15:30')), False)
+check('สี่ทุ่มไม่ใช่ราคาสด', session.state(at('2026-08-18 22:00'))['live'], False)
+check('เสาร์ปิดหมด', session.state(at('2026-08-22 11:00'))['weekend'], True)
+check('  และบอกว่าเป็นราคาปิดวันศุกร์',
+      'ศุกร์' in session.state(at('2026-08-22 11:00'))['note'], True)
+check('ตอนเปิดจริงไม่มีคำเตือนรก',
+      session.bucket_note('cheap', session.state(at('2026-08-18 10:30'))), '')
+check('ตอนปิดเตือนพร้อมรอบถัดไป',
+      '10:15' in session.bucket_note('dr', session.state(at('2026-08-18 22:00'))), True)
+
+
+# ------------------------------------------------------------------------------
+print('\nnet — feed พังครั้งเดียวต้องไม่ทำให้ก้อนนั้นหายทั้งก้อน')
+
+import urllib.error                                               # noqa: E402
+from trader.feeds import net                                      # noqa: E402
+
+
+def http(code):
+    def raise_it(timeout):
+        raise urllib.error.HTTPError('u', code, 'x', {}, None)
+    return raise_it
+
+
+tries = {'n': 0}
+
+
+def flaky(timeout):
+    tries['n'] += 1
+    if tries['n'] < 2:
+        raise urllib.error.HTTPError('u', 503, 'Busy', {}, None)
+    return {'ok': True}
+
+
+check('503 แล้วลองใหม่จนสำเร็จ', net.fetch(flaky, 'x'), {'ok': True})
+check('  ลองไป 2 ครั้ง', tries['n'], 2)
+
+for code, retried in ((403, False), (404, False), (429, True), (502, True)):
+    calls = {'n': 0}
+
+    def counted(timeout, c=code, k=calls):
+        k['n'] += 1
+        raise urllib.error.HTTPError('u', c, 'x', {}, None)
+
+    try:
+        net.fetch(counted, 'x')
+    except net.FeedError:
+        pass
+    check(f'  HTTP {code} {"ลองใหม่" if retried else "เลิกทันที"}',
+          calls['n'] > 1, retried)
+
+check('ยังโยน FeedError เดิมให้ caller จับได้',
+      dw_hsi.tv.FeedError is net.FeedError, True)
+
+
+# ------------------------------------------------------------------------------
 print('\nreview — จับคู่ ENTER/EXIT')
 
 rows = [
