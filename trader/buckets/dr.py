@@ -25,8 +25,16 @@ _COLS = [
 ]
 
 
-def scan(budget: float = None) -> dict:
+def scan(budget: float = None, risk_thb: float = None, cash: float = None,
+         exclude=()) -> dict:
     budget = config.ALLOC['dr'] if budget is None else budget
+    risk_thb = config.risk_thb() if risk_thb is None else risk_thb
+    cap = budget if cash is None else max(0.0, min(cash, budget))
+    # Either a plain list of symbols or {symbol: why} — a name held and a
+    # name just stopped out are both untouchable, for different reasons.
+    exclude = {str(k).upper(): (exclude[k] if isinstance(exclude, dict)
+                                else 'ถืออยู่แล้ว — เงินก้อนนี้ยังไม่ว่าง')
+               for k in exclude}
 
     rows = tv.screen(
         filters=[
@@ -61,15 +69,15 @@ def scan(budget: float = None) -> dict:
             'perf_w': num(r, 'Perf.W'),
             'rec': num(r, 'Recommend.All'),
             'issuer': ''.join(ch for ch in sym[-2:] if ch.isdigit()),
+            'lots': 0, 'cost': 0.0, 'risk_thb': 0.0,
         }
         m['tick_pct'] = sizing.tick(close) / close * 100.0
-        m.update(sizing.size(close, budget))
 
         reason = None
-        if m['rsi'] is None:
+        if m['symbol'].upper() in exclude:
+            reason = exclude[m['symbol'].upper()]
+        elif m['rsi'] is None:
             reason = 'อินดิเคเตอร์ไม่ครบ — DR เพิ่งเข้าเทรด'
-        elif m['lots'] < 1:
-            reason = f'งบ {budget:,.0f}฿ ไม่พอ 1 lot (ต้อง {close * config.BOARD_LOT:,.0f}฿)'
         elif m['tick_pct'] > config.DR_MAX_TICK_PCT:
             reason = f"1 ช่องราคา = {m['tick_pct']:.1f}% — หยาบเกินเดย์เทรด"
         elif m['gap'] is not None and m['gap'] > config.DR_MAX_GAP:
@@ -77,18 +85,35 @@ def scan(budget: float = None) -> dict:
         elif m['change'] is not None and m['gap'] is not None and m['gap'] > 0 > m['change']:
             reason = 'เปิด gap ขึ้นแล้วโดนขายทิ้ง — gap fade'
 
+        if not reason:
+            plan = _plan_prices(m)
+            m.update(sizing.size_by_risk(close, plan['sl'], risk_thb, cap=cap))
+            if m['lots'] < 1:
+                reason = _no_lot_reason(m, plan, risk_thb, cap)
+            else:
+                plan['max_loss_thb'] = m['risk_thb']
+                plan['risk_pct_account'] = m['risk_pct']
+                m['plan'] = plan
+
         if reason:
             m['reject'] = reason
             rejected.append(m)
         else:
             m['score'] = _score(m)
-            m['plan'] = _plan(m)
             passed.append(m)
 
     passed.sort(key=lambda x: -x['score'])
     passed, dupes = _dedupe_underlying(passed)
     return {'passed': passed, 'rejected': rejected, 'dupes': dupes,
-            'universe': len(rows) - nvdr, 'nvdr_filtered': nvdr}
+            'universe': len(rows) - nvdr, 'nvdr_filtered': nvdr, 'cash': cap}
+
+
+def _no_lot_reason(m: dict, plan: dict, risk_thb: float, cap: float) -> str:
+    per_lot_cost = m['close'] * config.BOARD_LOT
+    per_lot_risk = (m['close'] - plan['sl']) * config.BOARD_LOT
+    if per_lot_cost > cap:
+        return f"เงินว่าง {cap:,.0f}฿ ไม่พอ 1 lot (ต้อง {per_lot_cost:,.0f}฿)"
+    return f"1 lot เสี่ยง {per_lot_risk:,.0f}฿ — เกินโควตา {risk_thb:,.0f}฿/ไม้"
 
 
 def _dedupe_underlying(ranked: list) -> tuple:
@@ -123,18 +148,20 @@ def _score(m: dict) -> float:
     return s
 
 
-def _plan(m: dict) -> dict:
+def _plan_prices(m: dict) -> dict:
+    """Intraday levels, snapped onto the tick grid so they are placeable."""
     atr = m['atr'] or (m['close'] * 0.03)
-    tick = sizing.tick(m['close'])
-    tp = m['close'] + max(atr * 0.8, tick * 3)
-    sl = max(tick, m['close'] - max(atr * 0.6, tick * 2))
-    risk, reward = max(m['close'] - sl, tick), tp - m['close']
+    t = sizing.tick(m['close'])
+    tp = sizing.to_tick(m['close'] + max(atr * 0.8, t * 3), 'up')
+    sl = max(t, sizing.to_tick(m['close'] - max(atr * 0.6, t * 2), 'down'))
+    risk, reward = max(m['close'] - sl, t), tp - m['close']
     return {
         'entry': round(m['close'], 2),
-        'tp': round(tp, 2),
-        'sl': round(sl, 2),
+        'tp': tp,
+        'sl': sl,
         'tp_pct': reward / m['close'] * 100.0,
         'sl_pct': -risk / m['close'] * 100.0,
         'rr': reward / risk,
-        'max_loss_thb': m['cost'] * risk / m['close'],
+        'max_loss_thb': 0.0,
+        'risk_pct_account': 0.0,
     }

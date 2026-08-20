@@ -10,7 +10,7 @@ sequence spends the budget on waiting.
 
 from concurrent.futures import ThreadPoolExecutor
 
-from trader import cache, config
+from trader import cache, config, risk
 from trader.buckets import cheap, dr, dw_hsi
 from trader.feeds import thaidw
 from trader.journal import now_bkk
@@ -27,7 +27,7 @@ def _dw() -> dict:
         out['verdict'] = 'wait'
         return out
 
-    res = dw_hsi.screen_warrants(sig['side'])
+    res = dw_hsi.screen_warrants(sig['side'], sig)
     out['passed'], out['rejected'] = res['passed'], res['rejected']
     if not res['passed']:
         out['verdict'] = 'none'
@@ -35,18 +35,34 @@ def _dw() -> dict:
 
     out['verdict'] = 'call' if sig['side'] == 'C' else 'put'
     out['pick'] = res['passed'][0]
-    out['plan'] = dw_hsi.build_plan(out['pick'], sig)
+    out['plan'] = out['pick']['plan']
     return out
 
 
+def _free(bucket: str) -> tuple:
+    """Cash and untouchable names for one bucket — open positions are not
+    spendable, and something stopped out this morning is not a fresh idea."""
+    held = [p for p in risk.open_positions() if p.get('bucket') == bucket]
+    cash = max(0.0, config.ALLOC[bucket]
+               - sum(float(p.get('cost') or 0) for p in held))
+    blocked = {p['symbol']: 'ถืออยู่แล้ว — เงินก้อนนี้ยังไม่ว่าง' for p in held}
+    for sym in risk.stopped_today(bucket):
+        blocked.setdefault(sym, 'เพิ่งโดน SL วันนี้ — ไม่เข้าซ้ำในวันเดียวกัน')
+    return cash, blocked
+
+
 def _cheap() -> dict:
-    res = cheap.scan()
+    cash, held = _free('cheap')
+    res = cheap.scan(cash=cash, exclude=held)
+    res['held'] = sorted(held)
     res['verdict'] = 'buy' if res['passed'] else 'wait'
     return res
 
 
 def _dr() -> dict:
-    res = dr.scan()
+    cash, held = _free('dr')
+    res = dr.scan(cash=cash, exclude=held)
+    res['held'] = sorted(held)
     res['verdict'] = 'buy' if res['passed'] else 'wait'
     return res
 
@@ -55,7 +71,8 @@ def collect(buckets=('dw', 'cheap', 'dr')) -> dict:
     """Returns {bucket: result} plus an 'errors' map for whatever failed."""
     jobs = {'dw': _dw, 'cheap': _cheap, 'dr': _dr}
     out = {'generated_at': now_bkk(), 'errors': {},
-           'budget': dict(config.ALLOC), 'total': config.BUDGET_TOTAL}
+           'budget': dict(config.ALLOC), 'total': config.BUDGET_TOTAL,
+           'risk': risk.state()}
 
     with ThreadPoolExecutor(max_workers=3) as pool:
         futures = {name: pool.submit(jobs[name]) for name in buckets}

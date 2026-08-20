@@ -1,6 +1,6 @@
 """Assemble the full HTML page from a collected brief."""
 
-from trader import config
+from trader import config, risk
 from .html import (CSS, badge, cut_list, e, gauge, ladder, meter, n, rr_bar,
                    table)
 
@@ -151,6 +151,21 @@ def render(brief: dict) -> str:
         f'<div class="err">ก้อน {e(k)} ดึงข้อมูลไม่ได้ — {e(v)}</div>'
         for k, v in brief['errors'].items())
 
+    st = brief.get('risk') or risk.state()
+    # The web view still shows the market when the day is spent — it is a
+    # glance from a phone, not an order slip — but it says so first and loudly.
+    stop = (f'<div class="err"><b>✕ หยุดเทรดวันนี้</b> — {e(st["reason"])}</div>'
+            if st['blocked'] else '')
+    quota = (f'<div class="alloc"><span>เสี่ยงได้ต่อไม้ '
+             f'<b>{n(config.risk_thb(), 0)}฿</b></span>'
+             f'<span>เพดานขาดทุน/วัน <b>{n(st["limit"], 0)}฿</b></span>'
+             f'<span>{e(risk.headline(st))}</span></div>')
+    held = ''.join(
+        f'<span>{e(p.get("bucket", "?"))} <b>{e(p.get("symbol", "?"))}</b> '
+        f'{p.get("lots", 0)} lot @ {float(p.get("entry") or 0):.2f}</span>'
+        for p in st['open'][:4])
+    holding = f'<div class="alloc"><span>ถืออยู่</span>{held}</div>' if held else ''
+
     return f"""<!doctype html>
 <html lang="th"><head>
 <meta charset="utf-8">
@@ -163,6 +178,9 @@ def render(brief: dict) -> str:
 <header><h1>แผนเทรดวันนี้</h1>
 <span class="stamp">{ts:%d/%m/%Y} · {ts:%H:%M} น. (กรุงเทพ)</span></header>
 <div class="alloc"><span>ทุนรวม <b>{brief['total']:,.0f}฿</b></span>{alloc}</div>
+{quota}
+{holding}
+{stop}
 {errors}
 {_dw_card(brief.get('dw'))}
 {_swing_card(brief.get('cheap'))}

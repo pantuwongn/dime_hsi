@@ -7,20 +7,44 @@ def commission(value: float) -> float:
     return max(value * config.COMM_RATE, config.MIN_COMM if value > 0 else 0.0)
 
 
-def size(ask: float, budget: float) -> dict:
-    """
-    How many board lots fit in `budget`, and what the round trip really costs.
+def _nan(x) -> bool:
+    return x is None or x != x
 
-    On a 5,000 THB account the fee floor matters more than the signal: a broker
-    with a 50 THB daily minimum turns a 1,200 THB position into a 8.3% round
-    trip, which no intraday edge survives.
-    """
-    if not ask or ask <= 0:
-        return {'lots': 0, 'units': 0, 'cost': 0.0, 'fee_pct': float('nan')}
 
-    per_lot = ask * config.BOARD_LOT
-    lots = int(budget // per_lot)
-    cost = lots * per_lot
+def size_by_risk(entry: float, stop: float, risk_thb: float = None,
+                 cap: float = None) -> dict:
+    """
+    How many board lots put exactly `risk_thb` between the entry and the stop,
+    never spending more than `cap` THB of capital.
+
+    This is the inversion that matters on a small account. Sizing off the
+    budget answers "how much can I buy", which makes every trade a different
+    bet — a stop 40% away costs four times what one 10% away does on the same
+    ticket. Sizing off the stop answers "how much can I afford to be wrong by",
+    so a losing streak subtracts a predictable amount instead of whatever the
+    chart happened to hand you.
+
+    `cap` still binds: the allocation is a ceiling, and lots are whole.
+    """
+    risk_thb = config.risk_thb() if risk_thb is None else risk_thb
+    cap = config.BUDGET_TOTAL if cap is None else cap
+
+    dead = {'lots': 0, 'units': 0, 'cost': 0.0, 'fee': 0.0,
+            'fee_pct': float('nan'), 'risk_thb': 0.0, 'risk_pct': 0.0,
+            'capped_by': None}
+    if _nan(entry) or entry <= 0 or _nan(stop) or stop >= entry:
+        return dead
+
+    per_lot_cost = entry * config.BOARD_LOT
+    per_lot_risk = (entry - stop) * config.BOARD_LOT
+    if per_lot_risk <= 0 or per_lot_cost <= 0:
+        return dead
+
+    by_risk = int(risk_thb // per_lot_risk)
+    by_cap = int(cap // per_lot_cost)
+    lots = max(0, min(by_risk, by_cap))
+
+    cost = lots * per_lot_cost
     fee = commission(cost) * 2 if cost else 0.0
     return {
         'lots': lots,
@@ -28,6 +52,12 @@ def size(ask: float, budget: float) -> dict:
         'cost': cost,
         'fee': fee,
         'fee_pct': (fee / cost * 100) if cost else float('nan'),
+        'risk_thb': lots * per_lot_risk,
+        'risk_pct': lots * per_lot_risk / config.BUDGET_TOTAL * 100.0,
+        # Which limit actually decided the size — worth showing, because
+        # "the allocation was too small" and "one lot already risks too much"
+        # are different problems with different fixes.
+        'capped_by': 'งบ' if by_cap < by_risk else 'ความเสี่ยง',
     }
 
 

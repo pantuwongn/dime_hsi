@@ -12,7 +12,7 @@ Standard library only: no pandas, no yfinance, no rich to install.
 import argparse
 import sys
 
-from trader import cache, config, graph, journal, ui
+from trader import cache, config, graph, journal, risk, sizing, ui
 from trader.feeds import tv
 from trader.buckets import dw_hsi, cheap, dr
 from trader.graph import (bar, big_badge, pad, panel, rr_bar, rsi_gauge,
@@ -77,7 +77,7 @@ def show_dw(record: bool) -> None:
                                   'hsi': sig['close']})
         return
 
-    res = dw_hsi.screen_warrants(sig['side'])
+    res = dw_hsi.screen_warrants(sig['side'], sig)
     tone = 'bright_green' if sig['side'] == 'C' else 'bright_red'
 
     if not res['passed']:
@@ -106,7 +106,7 @@ def show_dw(record: bool) -> None:
     lines += _rejects(res['rejected'])
 
     pick = res['passed'][0]
-    plan = dw_hsi.build_plan(pick, sig)
+    plan = pick['plan']
     lines += ['', graph.divider(W, 'สั่งซื้อ')]
     lines.append('  ' + ui.c(f"{pick['symbol']}   {pick['lots']} lot "
                              f"({pick['units']:,} หน่วย) @ {pick['ask']:.2f}", 'bold', tone)
@@ -130,15 +130,23 @@ def show_dw(record: bool) -> None:
     lines.append('  ' + ui.c(f"ค่าเข้าออก spread {pick['spread_pct']:.1f}% + คอม "
                              f"{pick['fee_pct']:.2f}% — ดัชนีต้องวิ่ง "
                              f"{pick['breakeven_pts']:.0f} จุดถึงเสมอตัว", 'dim'))
+    lines.append('  ' + pad('เสี่ยงไม้นี้', 16)
+                 + ui.c(f"{plan['max_loss_thb']:,.0f}฿", 'bold')
+                 + ui.c(f"  = {plan['risk_pct_account']:.1f}% ของพอร์ต "
+                        f"(เพดาน {config.RISK_PER_TRADE:.1%})  "
+                        f"ขนาดไม้ถูกจำกัดด้วย{pick.get('capped_by') or '—'}", 'dim'))
     lines.append('  ' + ui.c(f"⚠  ปิดสถานะไม่เกิน {config.SESSIONS['eod_close']} น. "
                              '— ห้ามถือ DW ข้ามคืน', 'yellow'))
+    lines.append('  ' + ui.c(f"ซื้อจริงแล้วยืนยันด้วย  python3 run.py --took "
+                             f"{pick['symbol']}  เพื่อให้เบรกเกอร์นับไม้นี้", 'dim'))
 
     _panel('ก้อน A · HSI DW · เดย์เทรด', lines, tone)
     if record:
-        journal.record('dw', {'action': 'ENTER', 'symbol': pick['symbol'],
+        journal.record('dw', {'action': 'SIGNAL', 'symbol': pick['symbol'],
                               'side': pick['side'], 'entry': pick['ask'],
                               'lots': pick['lots'], 'cost': pick['cost'],
                               'tp': plan['tp_price'], 'sl': plan['sl_price'],
+                              'risk_thb': plan['max_loss_thb'],
                               'composite': sig['composite'], 'hsi': sig['close']})
 
 
@@ -204,8 +212,10 @@ _fit(_CH_W, 'ตารางหุ้นถูก')
 
 
 def show_cheap(record: bool) -> None:
+    held = [p for p in risk.open_positions() if p.get('bucket') == 'cheap']
+    cash = max(0.0, config.ALLOC['cheap'] - sum(float(p.get('cost') or 0) for p in held))
     try:
-        res = cheap.scan()
+        res = cheap.scan(cash=cash, exclude=_exclude('cheap', held))
     except tv.FeedError as e:
         _panel('ก้อน B · หุ้นไทยราคาต่ำ', [ui.c(f'✗ ดึงข้อมูลไม่ได้: {e}', 'bright_red')], 'red')
         return
@@ -213,6 +223,7 @@ def show_cheap(record: bool) -> None:
     lines = ['  ' + ui.c(f"ผ่านด่านสภาพคล่อง {res['universe']} ตัว", 'bold')
              + ui.c(f"  จาก ~430 ตัวที่ราคา < {config.CHEAP_MAX_PRICE:.0f}฿ "
                     f"(ต้องซื้อขาย > {config.CHEAP_MIN_VALUE / 1e6:.0f} ลบ./วัน)", 'dim')]
+    lines += _cash_line(held, cash, config.ALLOC['cheap'])
 
     if not res['passed']:
         lines += [''] + big_badge('wait', 'ไม่มีตัวไหนผ่านเกณฑ์โมเมนตัม → ถือเงินสด')
@@ -238,10 +249,11 @@ def show_cheap(record: bool) -> None:
         lines += _entry_block(m, m['plan'],
                               note=f"ถือไม่เกิน {m['plan']['hold_days']} วัน")
         if record:
-            journal.record('cheap', {'action': 'ENTER', 'symbol': m['symbol'],
+            journal.record('cheap', {'action': 'SIGNAL', 'symbol': m['symbol'],
                                      'entry': m['plan']['entry'], 'lots': m['lots'],
                                      'cost': m['cost'], 'tp': m['plan']['tp'],
-                                     'sl': m['plan']['sl']})
+                                     'sl': m['plan']['sl'],
+                                     'risk_thb': m['plan']['max_loss_thb']})
     _panel(f"ก้อน B · หุ้นไทย < {config.CHEAP_MAX_PRICE:.0f}฿ · "
            f"สวิง {config.CHEAP_HOLD_DAYS} วัน", lines, 'green')
 
@@ -256,14 +268,17 @@ _fit(_DR_W, 'ตาราง DR')
 
 
 def show_dr(record: bool) -> None:
+    held = [p for p in risk.open_positions() if p.get('bucket') == 'dr']
+    cash = max(0.0, config.ALLOC['dr'] - sum(float(p.get('cost') or 0) for p in held))
     try:
-        res = dr.scan()
+        res = dr.scan(cash=cash, exclude=_exclude('dr', held))
     except tv.FeedError as e:
         _panel('ก้อน C · DR', [ui.c(f'✗ ดึงข้อมูลไม่ได้: {e}', 'bright_red')], 'red')
         return
 
     lines = ['  ' + ui.c(f"DR ที่มีสภาพคล่อง {res['universe']} ตัว", 'bold')
              + ui.c(f"  กรอง NVDR ออก {res['nvdr_filtered']} รายการ", 'dim')]
+    lines += _cash_line(held, cash, config.ALLOC['dr'])
     if res.get('dupes'):
         dupe_txt = ', '.join(f'{a}→{b}' for a, b in res['dupes'][:4])
         lines.append('  ' + ui.c(f'รวมหุ้นแม่ซ้ำ: {dupe_txt}', 'dim'))
@@ -289,16 +304,36 @@ def show_dr(record: bool) -> None:
     lines += _entry_block(m, m['plan'], note=m['name'])
     _panel('ก้อน C · DR · เทรดตาม gap เปิดตลาด', lines, 'blue')
     if record:
-        journal.record('dr', {'action': 'ENTER', 'symbol': m['symbol'],
+        journal.record('dr', {'action': 'SIGNAL', 'symbol': m['symbol'],
                               'entry': m['plan']['entry'], 'lots': m['lots'],
                               'cost': m['cost'], 'tp': m['plan']['tp'],
-                              'sl': m['plan']['sl']})
+                              'sl': m['plan']['sl'],
+                              'risk_thb': m['plan']['max_loss_thb']})
+
+
+def _exclude(bucket: str, held: list) -> dict:
+    """Symbols this bucket must not recommend today, each with its reason."""
+    out = {p['symbol']: 'ถืออยู่แล้ว — เงินก้อนนี้ยังไม่ว่าง' for p in held}
+    for sym in risk.stopped_today(bucket):
+        out.setdefault(sym, 'เพิ่งโดน SL วันนี้ — ไม่เข้าซ้ำในวันเดียวกัน')
+    return out
+
+
+def _cash_line(held: list, cash: float, alloc: float) -> list:
+    """Money already in the market is not money you can size against."""
+    if not held:
+        return []
+    txt = ', '.join(f"{p['symbol']} {p.get('lots', 0)} lot" for p in held[:3])
+    return ['  ' + ui.c(f"ถืออยู่ {txt}", 'bold')
+            + ui.c(f"   เงินว่างจริง {cash:,.0f}฿ จาก {alloc:,.0f}฿ "
+                   '— คิดขนาดไม้จากเงินว่าง ไม่ใช่จากงบเต็ม', 'dim')]
 
 
 def _entry_block(m: dict, p: dict, note: str = '') -> list:
     return [
         '  ' + ui.c(f"{m['symbol']}   {m['lots']} lot @ {p['entry']:.2f}", 'bold', 'green')
-        + ui.c(f"   = {m['cost']:,.0f}฿   เสียมากสุด {p['max_loss_thb']:,.0f}฿   {note}", 'dim'),
+        + ui.c(f"   = {m['cost']:,.0f}฿   เสี่ยง {p['max_loss_thb']:,.0f}฿ "
+               f"({p['risk_pct_account']:.1f}%)   {note[:20]}", 'dim'),
         '  ' + pad('', 16) + rr_bar(p['sl'], p['entry'], p['tp'], 24)
         + ui.c(f"  SL {p['sl']:.2f} ({p['sl_pct']:.0f}%)", 'bright_red')
         + ui.c(f"  TP {p['tp']:.2f} (+{p['tp_pct']:.0f}%)", 'bright_green')
@@ -308,9 +343,10 @@ def _entry_block(m: dict, p: dict, note: str = '') -> list:
 
 # ------------------------------------------------------------------------------
 
-def header() -> None:
+def header(st: dict = None) -> None:
     now = journal.now_bkk()
     total = config.BUDGET_TOTAL
+    st = risk.state() if st is None else st
     lines = ['  ' + ui.c(f"{now:%A %d/%m/%Y}  ·  {now:%H:%M} น. (กรุงเทพ)", 'bold')]
     alloc = '  ' + pad(f'ทุนรวม {total:,.0f}฿', 18)
     for key, label, tone in (('dw', 'DW', 'red'), ('dr', 'DR', 'blue'),
@@ -318,10 +354,107 @@ def header() -> None:
         alloc += f"{label} " + bar(config.ALLOC[key], total, 10, tone) \
                  + f" {config.ALLOC[key]:,.0f}   "
     lines.append(alloc)
+    lines.append('  ' + pad('เสี่ยงได้ต่อไม้', 18)
+                 + ui.c(f"{config.risk_thb():,.0f}฿", 'bold')
+                 + ui.c(f" ({config.RISK_PER_TRADE:.1%})   เพดานขาดทุน/วัน "
+                        f"{config.daily_loss_limit():,.0f}฿ "
+                        f"({config.MAX_DAILY_LOSS:.0%})   สูงสุด "
+                        f"{config.MAX_DAILY_TRADES} ไม้/วัน", 'dim'))
+    quota = bar(st['remaining'], st['limit'], 12,
+                'green' if st['remaining'] > st['limit'] / 2 else 'yellow')
+    lines.append('  ' + pad('โควตาวันนี้', 18) + quota
+                 + ui.c(f"  {risk.headline(st)}", 'dim'))
+    for pos in st['open'][:3]:
+        lines.append('    ' + ui.c(f"ถืออยู่ · {pos.get('bucket', '?')} "
+                                   f"{pos.get('symbol', '?')} {pos.get('lots', 0)} lot "
+                                   f"@ {float(pos.get('entry') or 0):.2f} "
+                                   f"· SL {float(pos.get('sl') or 0):.2f} "
+                                   f"· เสี่ยง {float(pos.get('risk_thb') or 0):,.0f}฿", 'dim'))
     if config.MIN_COMM > 0:
         lines.append('  ' + ui.c(f"⚠ ค่าคอมขั้นต่ำ {config.MIN_COMM:.0f}฿/วัน "
                                  '— ไม้เล็กจะโดนค่าธรรมเนียมกิน', 'yellow'))
-    _panel('แผนเทรดวันนี้', lines, 'magenta')
+    _panel('แผนเทรดวันนี้', lines, 'red' if st['blocked'] else 'magenta')
+
+
+def cmd_took(symbol: str, price: float = None) -> int:
+    """
+    Confirm that a recommendation actually became a position.
+
+    The journal used to write ENTER every time the script produced a
+    recommendation, which made "how many trades today" the same number as "how
+    many times did I run this" — useless as a limit. Recommendations are SIGNAL
+    now, and only this turns one into a trade the breaker counts.
+    """
+    symbol = symbol.upper()
+    sig = None
+    for r in journal.load():
+        if r.get('action') == 'SIGNAL' and str(r.get('symbol', '')).upper() == symbol:
+            sig = r
+    if sig is None:
+        ui.fail(f'ไม่เจอสัญญาณของ {symbol} ใน journal — รัน run.py ให้มันแนะนำก่อน')
+        return 1
+
+    entry = price if price else float(sig.get('entry') or 0)
+    lots = int(sig.get('lots') or 0)
+    sl = float(sig.get('sl') or 0)
+    if entry <= 0 or lots < 1:
+        ui.fail(f'สัญญาณของ {symbol} ไม่มีราคาหรือจำนวน lot ที่ใช้ได้')
+        return 1
+
+    cost = entry * lots * config.BOARD_LOT
+    risk_thb = max(0.0, entry - sl) * lots * config.BOARD_LOT
+    journal.record(sig.get('bucket', '?'), {
+        'action': 'ENTER', 'symbol': symbol, 'entry': entry, 'lots': lots,
+        'cost': cost, 'sl': sl, 'tp': float(sig.get('tp') or 0),
+        'risk_thb': risk_thb})
+
+    st = risk.state()
+    print()
+    print(ui.c(f'  บันทึกแล้ว: ซื้อ {symbol} {lots} lot @ {entry:.2f} '
+               f'= {cost:,.0f}฿', 'bold', 'green'))
+    print(ui.c(f'  เสี่ยง {risk_thb:,.0f}฿ ถ้าโดน SL {sl:.2f}', 'dim'))
+    print(ui.c('  ' + risk.headline(st), 'dim'))
+    if st['blocked']:
+        print(ui.c(f'  ✋ {st["reason"]} — พอแล้วสำหรับวันนี้', 'bright_red'))
+    print()
+    return 0
+
+
+def cmd_close(symbol: str, price: float) -> int:
+    """Close a position and book the result, fees included."""
+    symbol = symbol.upper()
+    pos = next((p for p in risk.open_positions()
+                if str(p.get('symbol', '')).upper() == symbol), None)
+    if pos is None:
+        ui.fail(f'ไม่มีสถานะเปิดของ {symbol} — ยืนยันตอนซื้อด้วย --took หรือยัง')
+        return 1
+    if not price or price <= 0:
+        ui.fail('ต้องระบุราคาขายด้วย --price')
+        return 1
+
+    lots = int(pos.get('lots') or 0)
+    entry = float(pos.get('entry') or 0)
+    units = lots * config.BOARD_LOT
+    cost = float(pos.get('cost') or entry * units)
+    proceeds = price * units
+    fees = sizing.commission(cost) + sizing.commission(proceeds)
+    pnl = proceeds - cost - fees
+
+    journal.record(pos.get('bucket', '?'), {
+        'action': 'EXIT', 'symbol': symbol, 'entry': entry, 'exit': price,
+        'lots': lots, 'cost': cost, 'proceeds': proceeds, 'fees': fees,
+        'pnl': pnl})
+
+    st = risk.state()
+    tone = 'bright_green' if pnl >= 0 else 'bright_red'
+    print()
+    print(ui.c(f'  ปิด {symbol} {lots} lot  {entry:.2f} → {price:.2f}   '
+               f'{pnl:+,.0f}฿ (หักค่าธรรมเนียม {fees:,.0f}฿ แล้ว)', 'bold', tone))
+    print(ui.c('  ' + risk.headline(st), 'dim'))
+    if st['blocked']:
+        print(ui.c(f'  ✋ {st["reason"]}', 'bright_red'))
+    print()
+    return 0
 
 
 def main() -> int:
@@ -334,11 +467,25 @@ def main() -> int:
                     help='บังคับใช้สีแม้ pipe ออกไฟล์ (คู่กับ less -R)')
     ap.add_argument('--html', metavar='FILE',
                     help='สร้างหน้าเว็บแบบเดียวกับที่ deploy แล้วเขียนลงไฟล์')
+    ap.add_argument('--took', metavar='SYMBOL',
+                    help='ยืนยันว่าซื้อจริงแล้ว — นับเป็น 1 ไม้ของวันนี้')
+    ap.add_argument('--close', metavar='SYMBOL', dest='close_sym',
+                    help='ปิดสถานะและบันทึกกำไร/ขาดทุน (ใช้คู่กับ --price)')
+    ap.add_argument('--price', type=float, help='ราคาที่ซื้อ/ขายได้จริง')
+    ap.add_argument('--status', action='store_true',
+                    help='ดูโควตาความเสี่ยงวันนี้กับสถานะที่ถืออยู่ ไม่ต้องสแกนตลาด')
+    ap.add_argument('--force', action='store_true',
+                    help='สแกนต่อแม้ชนเบรกเกอร์ประจำวันแล้ว')
     args = ap.parse_args()
 
     PLAIN = args.plain
     if args.color:
         ui.force_color(True)
+
+    if args.took:
+        return cmd_took(args.took, args.price)
+    if args.close_sym:
+        return cmd_close(args.close_sym, args.price)
 
     if args.html:
         from web.page import render
@@ -348,9 +495,27 @@ def main() -> int:
                 ('dw', 'cheap', 'dr') if args.bucket == 'all' else (args.bucket,))))
         print(f'เขียน {args.html} แล้ว — เปิดด้วยเบราว์เซอร์เพื่อดูหน้าเว็บ')
         return 0
-    rec = not args.no_journal
+
+    st = risk.state()
     print()
-    header()
+    header(st)
+    if args.status:
+        return 0
+
+    # The breaker stops the scan, not just the recommendation. Looking at a
+    # screen full of setups you are not allowed to take is how the rule gets
+    # broken, so on a day that is already spent there is nothing to look at.
+    if st['blocked'] and not args.force:
+        lines = big_badge('stop', st['reason'])
+        lines += ['', ui.c('  พรุ่งนี้โควตาจะรีเซ็ตเอง ถ้าจะดูตลาดเฉย ๆ ใช้ --force',
+                           'yellow')]
+        lines += ['', ui.c('  ปิดสถานะที่ค้างอยู่:  python3 run.py --close SYMBOL '
+                           '--price 2.15', 'dim')]
+        _panel('หยุดเทรดวันนี้', lines, 'bright_red')
+        print(ui.c('  ตัวเลขทั้งหมดเป็นข้อมูลประกอบการตัดสินใจ ไม่ใช่คำแนะนำการลงทุน\n', 'dim'))
+        return 0
+
+    rec = not args.no_journal
     if args.bucket in ('all', 'dw'):
         show_dw(rec)
     if args.bucket in ('all', 'cheap'):

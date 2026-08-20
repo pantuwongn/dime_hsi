@@ -19,6 +19,35 @@ ALLOC = {
 
 BOARD_LOT = 100         # SET board lot for stocks, DW and DR alike
 
+# ------------------------------------------------------------------------------
+# RISK — the binding constraint on an account this size
+#
+# ALLOC above is a ceiling, not a target. What decides position size is how far
+# away the stop is, because "spend the whole allocation every time" makes every
+# trade a different bet: a DW stopped 40% away risks four times what one
+# stopped 10% away does on the same ticket. Risking a fixed slice of the
+# account instead makes them the same bet, which is the only way a losing
+# streak stays survivable here — at 1.5% you can lose thirty in a row and still
+# hold two thirds of the account.
+#
+# The daily limits exist because the way a small account actually dies is not
+# one bad trade. It is the third trade, taken to win back the first two.
+# ------------------------------------------------------------------------------
+RISK_PER_TRADE   = 0.015   # of BUDGET_TOTAL, between entry and stop
+MAX_DAILY_LOSS   = 0.04    # realised + still-open risk that ends the day
+MAX_DAILY_TRADES = 2       # confirmed entries per day, all buckets together
+
+
+def risk_thb() -> float:
+    """THB put at risk between entry and stop on a single position."""
+    return BUDGET_TOTAL * RISK_PER_TRADE
+
+
+def daily_loss_limit() -> float:
+    """THB of loss — booked or still on the table — that closes the day."""
+    return BUDGET_TOTAL * MAX_DAILY_LOSS
+
+
 # Round-trip cost assumption.
 #
 # Set to your own broker's rate — this is the one number here that is not a

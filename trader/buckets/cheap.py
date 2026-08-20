@@ -6,7 +6,8 @@ under 3 THB and almost all of them are untradeable: a stock at 0.02 THB moves
 one tick and you are down 50%, and a stock turning over 2 MB a day cannot be
 exited in size that matters even on a 5,000 THB account.
 
-So: liquidity gate first, momentum second.
+So: liquidity gate first, momentum second, and the stop before the size —
+the allocation is a ceiling, not an amount to spend.
 """
 
 from .. import config, sizing
@@ -21,9 +22,26 @@ _COLS = [
     'Perf.W', 'Recommend.All', 'High.1M', 'Low.1M',
 ]
 
+# Two concurrent names at most, so the per-name ceiling is half the bucket.
+_MAX_NAMES = 2
 
-def scan(budget: float = None) -> dict:
+
+def scan(budget: float = None, risk_thb: float = None, cash: float = None,
+         exclude=()) -> dict:
+    """
+    `cash` is what is actually free after open positions — a five-day hold
+    means that on day two the money is still committed, and sizing against the
+    full allocation would be spending it twice.
+    """
     budget = config.ALLOC['cheap'] if budget is None else budget
+    risk_thb = config.risk_thb() if risk_thb is None else risk_thb
+    cash = budget if cash is None else max(0.0, min(cash, budget))
+    cap = cash / _MAX_NAMES
+    # Either a plain list of symbols or {symbol: why} — a name held and a
+    # name just stopped out are both untouchable, for different reasons.
+    exclude = {str(k).upper(): (exclude[k] if isinstance(exclude, dict)
+                                else 'ถืออยู่แล้ว — เงินก้อนนี้ยังไม่ว่าง')
+               for k in exclude}
 
     rows = tv.screen(
         filters=[
@@ -54,11 +72,15 @@ def scan(budget: float = None) -> dict:
             'perf_w': num(r, 'Perf.W'),
             'rec': num(r, 'Recommend.All'),
             'high_1m': num(r, 'High.1M'), 'low_1m': num(r, 'Low.1M'),
+            'lots': 0, 'cost': 0.0, 'risk_thb': 0.0,
         }
-        m.update(sizing.size(close, budget / 2))   # plan for up to 2 concurrent names
 
+        # Gates that need no plan first, so the plan is only built for names
+        # that could actually be bought.
         reason = None
-        if m['rsi'] is None or m['ema21'] is None:
+        if m['symbol'].upper() in exclude:
+            reason = exclude[m['symbol'].upper()]
+        elif m['rsi'] is None or m['ema21'] is None:
             reason = 'อินดิเคเตอร์ไม่ครบ — หุ้นใหม่หรือถูกพักการซื้อขาย'
         elif m['rvol'] is not None and m['rvol'] < config.CHEAP_MIN_RVOL:
             reason = f"RVOL {m['rvol']:.2f} — ไม่มีแรงซื้อผิดปกติ"
@@ -66,14 +88,19 @@ def scan(budget: float = None) -> dict:
             reason = 'ต่ำกว่า EMA21 — ยังไม่กลับเป็นขาขึ้น'
         elif m['rsi'] > 78:
             reason = f"RSI {m['rsi']:.0f} — ร้อนเกินไล่"
-        elif m['lots'] < 1:
-            reason = 'งบไม่พอ 1 lot'
 
         if not reason:
-            m['plan'] = _plan(m)
-            if m['plan']['rr'] < config.CHEAP_MIN_RR:
-                reason = (f"risk/reward {m['plan']['rr']:.1f} — "
-                          f"เสี่ยงมากกว่าที่ได้")
+            plan = _plan_prices(m)
+            if plan['rr'] < config.CHEAP_MIN_RR:
+                reason = f"risk/reward {plan['rr']:.1f} — เสี่ยงมากกว่าที่ได้"
+            else:
+                m.update(sizing.size_by_risk(close, plan['sl'], risk_thb, cap=cap))
+                if m['lots'] < 1:
+                    reason = _no_lot_reason(m, plan, risk_thb, cap)
+                else:
+                    plan['max_loss_thb'] = m['risk_thb']
+                    plan['risk_pct_account'] = m['risk_pct']
+                    m['plan'] = plan
 
         if reason:
             m['reject'] = reason
@@ -83,7 +110,16 @@ def scan(budget: float = None) -> dict:
             passed.append(m)
 
     passed.sort(key=lambda x: -x['score'])
-    return {'passed': passed, 'rejected': rejected, 'universe': len(rows)}
+    return {'passed': passed, 'rejected': rejected, 'universe': len(rows),
+            'cash': cash, 'max_names': _MAX_NAMES}
+
+
+def _no_lot_reason(m: dict, plan: dict, risk_thb: float, cap: float) -> str:
+    per_lot_cost = m['close'] * config.BOARD_LOT
+    per_lot_risk = (m['close'] - plan['sl']) * config.BOARD_LOT
+    if per_lot_cost > cap:
+        return f"เงินว่าง {cap:,.0f}฿ ไม่พอ 1 lot (ต้อง {per_lot_cost:,.0f}฿)"
+    return f"1 lot เสี่ยง {per_lot_risk:,.0f}฿ — เกินโควตา {risk_thb:,.0f}฿/ไม้"
 
 
 def _macd_diff(r):
@@ -110,36 +146,39 @@ def _score(m: dict) -> float:
     return s
 
 
-def _plan(m: dict) -> dict:
+def _plan_prices(m: dict) -> dict:
     """
-    Stop first, target second.
+    Stop first, target second, both snapped onto the SET tick grid so they can
+    be typed into an order slip unchanged.
 
-    The stop is ATR-based and EMA21 may only *tighten* it, never widen it —
-    an EMA sitting 12% below the price is not a stop, it is a hope. The target
-    then has to clear that risk by 1.8x or the trade is not worth taking, and
-    the 1-month high only caps the target when it is genuinely overhead
-    resistance rather than the level price just broke out through.
+    The stop is ATR-based and EMA21 may only *tighten* it, never widen it — an
+    EMA sitting 12% below the price is not a stop, it is a hope. The target
+    then has to clear that risk by CHEAP_MIN_RR or the trade is not worth
+    taking, and the 1-month high only caps the target when it is genuinely
+    overhead resistance rather than the level price just broke out through.
     """
     atr = m['atr'] or (m['close'] * 0.03)
 
     sl = m['close'] - atr * 1.3
     if m['ema21'] and m['ema21'] * 0.985 > sl:
         sl = m['ema21'] * 0.985
-    sl = max(0.01, sl)
+    sl = max(0.01, sizing.to_tick(sl, 'down'))
 
-    risk = max(m['close'] - sl, 0.01)
-    tp = m['close'] + max(atr * 2.0, risk * 1.8)
+    risk = max(m['close'] - sl, sizing.tick(m['close']))
+    tp = m['close'] + max(atr * 2.0, risk * config.CHEAP_MIN_RR)
     if m['high_1m'] and m['high_1m'] > m['close'] * 1.02:
         tp = min(tp, m['high_1m'])
+    tp = sizing.to_tick(tp, 'up')
 
     reward = tp - m['close']
     return {
         'entry': round(m['close'], 2),
-        'tp': round(tp, 2),
-        'sl': round(sl, 2),
+        'tp': tp,
+        'sl': sl,
         'tp_pct': reward / m['close'] * 100.0,
         'sl_pct': -risk / m['close'] * 100.0,
         'rr': reward / risk,
         'hold_days': config.CHEAP_HOLD_DAYS,
-        'max_loss_thb': m['cost'] * risk / m['close'],
+        'max_loss_thb': 0.0,
+        'risk_pct_account': 0.0,
     }

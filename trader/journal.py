@@ -11,8 +11,11 @@ import os
 from datetime import datetime, timezone, timedelta
 
 BKK = timezone(timedelta(hours=7))
-PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                    'journal.jsonl')
+
+# DIME_JOURNAL points the log somewhere else — needed to exercise the daily
+# breaker without writing test trades into the real record.
+PATH = os.environ.get('DIME_JOURNAL') or os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'journal.jsonl')
 
 
 def now_bkk() -> datetime:
