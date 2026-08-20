@@ -15,6 +15,7 @@ keep instead of deciding by feel.
 
 from datetime import datetime
 
+from . import config, risk
 from .journal import load, now_bkk
 
 # Below this, a bucket's record is anecdote. Say so rather than ranking noise.
@@ -30,31 +31,37 @@ def _days(a: str, b: str) -> int:
 
 
 def closed_trades(rows: list = None) -> list:
-    """Pair each ENTER with the EXIT that ended it, oldest first."""
+    """
+    One record per exit, oldest first, priced against the lots it consumed.
+
+    A partial sale is its own trade: closing 2 of 5 lots books the result on
+    those 2, and the remaining 3 stay open until they are sold. Averaging the
+    exit over the whole original ticket would credit it with a result it has
+    not had yet.
+    """
     rows = load() if rows is None else rows
-    live, done = {}, []
-    for r in rows:
-        key = (r.get('bucket'), r.get('symbol'))
-        if r.get('action') == 'ENTER':
-            live.setdefault(key, []).append(r)
-        elif r.get('action') == 'EXIT' and live.get(key):
-            entry = live[key].pop(0)
-            cost = float(r.get('cost') or entry.get('cost') or 0.0)
-            pnl = float(r.get('pnl') or 0.0)
-            done.append({
-                'bucket': r.get('bucket'),
-                'symbol': r.get('symbol'),
-                'opened': entry.get('ts'),
-                'closed': r.get('ts'),
-                'entry': float(entry.get('entry') or 0.0),
-                'exit': float(r.get('exit') or 0.0),
-                'lots': int(entry.get('lots') or 0),
-                'cost': cost,
-                'fees': float(r.get('fees') or 0.0),
-                'pnl': pnl,
-                'pnl_pct': (pnl / cost * 100.0) if cost else 0.0,
-                'days': _days(entry.get('ts'), r.get('ts')),
-            })
+    done = []
+    for ex, taken in risk.walk(rows)[1]:
+        lots = sum(n for _, n in taken)
+        units = lots * config.BOARD_LOT
+        entry = sum(float(e.get('entry') or 0.0) * n for e, n in taken) / lots
+        cost = entry * units
+        pnl = float(ex.get('pnl') or 0.0)
+        opened = min(str(e.get('ts') or '') for e, _ in taken)
+        done.append({
+            'bucket': ex.get('bucket'),
+            'symbol': ex.get('symbol'),
+            'opened': opened,
+            'closed': ex.get('ts'),
+            'entry': entry,
+            'exit': float(ex.get('exit') or 0.0),
+            'lots': lots,
+            'cost': cost,
+            'fees': float(ex.get('fees') or 0.0),
+            'pnl': pnl,
+            'pnl_pct': (pnl / cost * 100.0) if cost else 0.0,
+            'days': _days(opened, ex.get('ts')),
+        })
     return done
 
 

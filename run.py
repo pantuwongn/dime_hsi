@@ -509,7 +509,8 @@ def cmd_review() -> int:
     return 0
 
 
-def cmd_took(symbol: str, price: float = None) -> int:
+def cmd_took(symbol: str, price: float = None, lots: int = None,
+             sl: float = None, tp: float = None, bucket: str = None) -> int:
     """
     Confirm that a recommendation actually became a position.
 
@@ -517,29 +518,48 @@ def cmd_took(symbol: str, price: float = None) -> int:
     recommendation, which made "how many trades today" the same number as "how
     many times did I run this" — useless as a limit. Recommendations are SIGNAL
     now, and only this turns one into a trade the breaker counts.
+
+    The suggestion is a default, never the record. Partial fills, a different
+    price, a smaller size because you had second thoughts, or a name the tool
+    never mentioned — all of it has to be writable, because a ledger that only
+    accepts what was predicted is a ledger of predictions, not of trades.
     """
     symbol = symbol.upper()
     sig = None
     for r in journal.load():
         if r.get('action') == 'SIGNAL' and str(r.get('symbol', '')).upper() == symbol:
             sig = r
-    if sig is None:
-        ui.fail(f'ไม่เจอสัญญาณของ {symbol} ใน journal — รัน run.py ให้มันแนะนำก่อน')
+
+    if sig is None and (sl is None or not price or not lots):
+        ui.fail(f'ไม่เจอสัญญาณของ {symbol} ใน journal')
+        print(ui.c('  ถ้าซื้อเองโดยสคริปต์ไม่ได้แนะนำ ต้องบอกให้ครบ:', 'dim'))
+        print(ui.c(f'  run.py --took {symbol} --price 1.54 --lots 8 --sl 1.49 '
+                   '--tp 1.59 --bucket cheap', 'dim'))
         return 1
 
+    sig = sig or {}
     entry = price if price else float(sig.get('entry') or 0)
-    lots = int(sig.get('lots') or 0)
-    sl = float(sig.get('sl') or 0)
+    lots = int(lots if lots else (sig.get('lots') or 0))
+    sl = float(sl if sl is not None else (sig.get('sl') or 0))
+    tp = float(tp if tp is not None else (sig.get('tp') or 0))
+    bucket = bucket or sig.get('bucket') or '?'
+
     if entry <= 0 or lots < 1:
-        ui.fail(f'สัญญาณของ {symbol} ไม่มีราคาหรือจำนวน lot ที่ใช้ได้')
+        ui.fail(f'{symbol}: ต้องมีราคาและจำนวน lot — ใส่ --price / --lots')
+        return 1
+    if sl and sl >= entry:
+        ui.fail(f'SL {sl:.2f} ไม่ต่ำกว่าราคาซื้อ {entry:.2f} — ตรวจตัวเลขอีกที')
         return 1
 
     cost = entry * lots * config.BOARD_LOT
     risk_thb = max(0.0, entry - sl) * lots * config.BOARD_LOT
-    journal.record(sig.get('bucket', '?'), {
+    journal.record(bucket, {
         'action': 'ENTER', 'symbol': symbol, 'entry': entry, 'lots': lots,
-        'cost': cost, 'sl': sl, 'tp': float(sig.get('tp') or 0),
-        'risk_thb': risk_thb})
+        'cost': cost, 'sl': sl, 'tp': tp, 'risk_thb': risk_thb})
+
+    if sig and (price or lots != int(sig.get('lots') or 0)):
+        print(ui.c(f"  (สคริปต์แนะนำ {sig.get('lots')} lot @ "
+                   f"{float(sig.get('entry') or 0):.2f} — บันทึกตามที่ซื้อจริง)", 'dim'))
 
     st = risk.state()
     print()
@@ -553,7 +573,7 @@ def cmd_took(symbol: str, price: float = None) -> int:
     return 0
 
 
-def cmd_close(symbol: str, price: float) -> int:
+def cmd_close(symbol: str, price: float, lots: int = None) -> int:
     """Close a position and book the result, fees included."""
     symbol = symbol.upper()
     pos = next((p for p in risk.open_positions()
@@ -565,10 +585,13 @@ def cmd_close(symbol: str, price: float) -> int:
         ui.fail('ต้องระบุราคาขายด้วย --price')
         return 1
 
-    lots = int(pos.get('lots') or 0)
+    lots = int(lots) if lots else int(pos.get('lots') or 0)
+    if lots > int(pos.get('lots') or 0):
+        ui.fail(f"ถือ {symbol} อยู่ {pos.get('lots')} lot ขายมากกว่านั้นไม่ได้")
+        return 1
     entry = float(pos.get('entry') or 0)
     units = lots * config.BOARD_LOT
-    cost = float(pos.get('cost') or entry * units)
+    cost = entry * units
     proceeds = price * units
     fees = sizing.commission(cost) + sizing.commission(proceeds)
     pnl = proceeds - cost - fees
@@ -605,6 +628,9 @@ def main() -> int:
     ap.add_argument('--close', metavar='SYMBOL', dest='close_sym',
                     help='ปิดสถานะและบันทึกกำไร/ขาดทุน (ใช้คู่กับ --price)')
     ap.add_argument('--price', type=float, help='ราคาที่ซื้อ/ขายได้จริง')
+    ap.add_argument('--lots', type=int, help='จำนวน lot ที่ซื้อ/ขายจริง ถ้าไม่เท่าที่แนะนำ')
+    ap.add_argument('--sl', type=float, help='จุดตัดขาดทุน (ตัวที่สคริปต์ไม่ได้แนะนำ)')
+    ap.add_argument('--tp', type=float, help='เป้าทำกำไร (ตัวที่สคริปต์ไม่ได้แนะนำ)')
     ap.add_argument('--status', action='store_true',
                     help='ดูโควตาความเสี่ยงวันนี้กับสถานะที่ถืออยู่ ไม่ต้องสแกนตลาด')
     ap.add_argument('--review', action='store_true',
@@ -620,9 +646,10 @@ def main() -> int:
     if args.review:
         return cmd_review()
     if args.took:
-        return cmd_took(args.took, args.price)
+        return cmd_took(args.took, args.price, args.lots, args.sl, args.tp,
+                        args.bucket if args.bucket != 'all' else None)
     if args.close_sym:
-        return cmd_close(args.close_sym, args.price)
+        return cmd_close(args.close_sym, args.price, args.lots)
 
     if args.html:
         from web.page import render

@@ -128,6 +128,19 @@ check('ไม้เดียวกินโควตาทั้งวัน →
 
 lost = two + [row('EXIT', 'SIRI', exit=1.88, cost=1200.0, fees=4.0, pnl=-76.0)]
 check('ปิดแล้วเหลือสถานะเดียว', len(risk.open_positions(lost)), 1)
+
+part = [row('ENTER', 'P', entry=2.0, lots=5, cost=1000.0, sl=1.9, risk_thb=50.0),
+        row('EXIT', 'P', exit=2.1, lots=2, cost=400.0, fees=2.0, pnl=18.0)]
+held = risk.open_positions(part)
+check('ขาย 2 จาก 5 lot → ยังถือ 3 lot', held[0]['lots'], 3)
+check('  ทุนที่เหลือคิดตาม 3 lot', held[0]['cost'], 600.0)
+check('  ความเสี่ยงลดตามส่วน', round(held[0]['risk_thb'], 6), 30.0)
+check('  ไม้ที่ปิดนับแค่ 2 lot', review.closed_trades(part)[0]['lots'], 2)
+
+avg = [row('ENTER', 'Q', entry=2.0, lots=5, cost=1000.0, sl=1.9),
+       row('ENTER', 'Q', entry=3.0, lots=5, cost=1500.0, sl=1.9)]
+check('ซื้อสองรอบ → รวมเป็นก้อนเดียว', len(risk.open_positions(avg)), 1)
+check('  ต้นทุนเฉลี่ย 2.50', risk.open_positions(avg)[0]['entry'], 2.5)
 check('ตัวที่เพิ่งโดน SL วันนี้ถูกกัน', risk.stopped_today('cheap', lost), ['SIRI'])
 won = two + [row('EXIT', 'SIRI', exit=2.18, cost=1200.0, fees=4.0, pnl=104.0)]
 check('  ตัวที่ปิดได้กำไรไม่ถูกกัน', risk.stopped_today('cheap', won), [])

@@ -25,24 +25,73 @@ def _day(ts: str):
         return None
 
 
+def walk(rows: list = None) -> tuple:
+    """
+    Match exits against entries FIFO, lot by lot.
+
+    Lot by lot matters: selling 2 of 5 lots is the ordinary way out of a
+    position that is half working, and matching whole tickets would erase the
+    other 3 from the ledger — the tool would report flat while the broker
+    reports otherwise, which is the one disagreement that must never happen.
+
+    Returns (open_chunks, closures) where a closure is (exit_row, [(entry_row,
+    lots), ...]) — the entries that exit actually consumed.
+    """
+    rows = load() if rows is None else rows
+    books, closures = {}, []
+    for r in rows:
+        key = (r.get('bucket'), r.get('symbol'))
+        action = r.get('action')
+        if action == 'ENTER':
+            n = int(r.get('lots') or 0)
+            if n > 0:
+                books.setdefault(key, []).append([r, n])
+        elif action == 'EXIT':
+            book = books.get(key) or []
+            want = int(r.get('lots') or 0) or sum(b[1] for b in book)
+            taken = []
+            while want > 0 and book:
+                chunk = book[0]
+                n = min(want, chunk[1])
+                taken.append((chunk[0], n))
+                chunk[1] -= n
+                want -= n
+                if chunk[1] <= 0:
+                    book.pop(0)
+            if taken:
+                closures.append((r, taken))
+    open_chunks = [(row, n) for book in books.values() for row, n in book if n > 0]
+    return open_chunks, closures
+
+
 def open_positions(rows: list = None) -> list:
     """
-    Entries with no exit yet, oldest first.
+    What is still held, oldest first, averaged the way a broker averages it.
 
     Needed for more than reporting: a 5-day swing means that on day two the
     money is still committed, and a tool that forgets it will happily size a
     fresh position against cash it does not have.
     """
-    rows = load() if rows is None else rows
-    live = {}
-    for r in rows:
-        key = (r.get('bucket'), r.get('symbol'))
-        if r.get('action') == 'ENTER':
-            live.setdefault(key, []).append(r)
-        elif r.get('action') == 'EXIT' and live.get(key):
-            live[key].pop(0)
-    out = [r for lot in live.values() for r in lot]
-    return sorted(out, key=lambda r: str(r.get('ts', '')))
+    chunks, _ = walk(rows)
+    merged = {}
+    for row, n in chunks:
+        key = (row.get('bucket'), row.get('symbol'))
+        entry = float(row.get('entry') or 0)
+        units = n * config.BOARD_LOT
+        risk = max(0.0, entry - float(row.get('sl') or 0)) * units
+        pos = merged.get(key)
+        if pos is None:
+            merged[key] = dict(row, lots=n, units=units, entry=entry,
+                               cost=entry * units, risk_thb=risk)
+            continue
+        total = pos['units'] + units
+        pos['entry'] = (pos['entry'] * pos['units'] + entry * units) / total
+        pos['lots'] += n
+        pos['units'] = total
+        pos['cost'] += entry * units
+        pos['risk_thb'] += risk
+        pos['ts'] = min(str(pos.get('ts') or ''), str(row.get('ts') or ''))
+    return sorted(merged.values(), key=lambda p: str(p.get('ts', '')))
 
 
 def committed(bucket: str = None, rows: list = None) -> float:
