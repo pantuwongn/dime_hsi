@@ -332,11 +332,22 @@ def main() -> int:
     ap.add_argument('--plain', action='store_true', help='ปิดกรอบและแถบกราฟ')
     ap.add_argument('--color', action='store_true',
                     help='บังคับใช้สีแม้ pipe ออกไฟล์ (คู่กับ less -R)')
+    ap.add_argument('--html', metavar='FILE',
+                    help='สร้างหน้าเว็บแบบเดียวกับที่ deploy แล้วเขียนลงไฟล์')
     args = ap.parse_args()
 
     PLAIN = args.plain
     if args.color:
         ui.force_color(True)
+
+    if args.html:
+        from web.page import render
+        from web.report import collect
+        with open(args.html, 'w', encoding='utf-8') as fh:
+            fh.write(render(collect(
+                ('dw', 'cheap', 'dr') if args.bucket == 'all' else (args.bucket,))))
+        print(f'เขียน {args.html} แล้ว — เปิดด้วยเบราว์เซอร์เพื่อดูหน้าเว็บ')
+        return 0
     rec = not args.no_journal
     print()
     header()

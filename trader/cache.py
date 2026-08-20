@@ -22,17 +22,27 @@ _MAX_ROWS = 4000
 
 
 def append(symbol: str, price: float) -> None:
+    """
+    Best effort. Serverless filesystems are read-only outside /tmp, and a
+    missing sparkline is never a reason to fail a page that is otherwise fine.
+    """
     if price is None:
         return
-    os.makedirs(_DIR, exist_ok=True)
-    with open(_PATH, 'a', encoding='utf-8') as fh:
-        fh.write(json.dumps({'t': now_bkk().isoformat(timespec='minutes'),
-                             's': symbol, 'p': round(float(price), 4)}) + '\n')
-    _trim()
+    try:
+        os.makedirs(_DIR, exist_ok=True)
+        with open(_PATH, 'a', encoding='utf-8') as fh:
+            fh.write(json.dumps({'t': now_bkk().isoformat(timespec='minutes'),
+                                 's': symbol, 'p': round(float(price), 4)}) + '\n')
+        _trim()
+    except OSError:
+        pass
 
 
 def series(symbol: str, limit: int = 30) -> list:
-    if not os.path.exists(_PATH):
+    try:
+        if not os.path.exists(_PATH):
+            return []
+    except OSError:
         return []
     out = []
     with open(_PATH, encoding='utf-8') as fh:
