@@ -9,13 +9,13 @@ pure logic.
 # ------------------------------------------------------------------------------
 # CAPITAL — total account is intentionally small, so allocation is a hard gate
 # ------------------------------------------------------------------------------
-BUDGET_TOTAL = 3_000.0
+BUDGET_TOTAL = 5_000.0
 
 ALLOC = {
-    'dw':      500.0,   # HSI DW, day trade, capital recycles daily
-    's50':     500.0,   # SET50 DW, day trade, same engine as HSI DW
-    'cheap': 1_000.0,   # SET stocks < 3 THB, swing 1-5 days (capital is locked)
-    'day':   1_000.0,   # SET stocks, day trade, flat by the close
+    'dw':      800.0,   # HSI DW, day trade, capital recycles daily
+    's50':     800.0,   # SET50 DW, day trade, same engine as HSI DW
+    'cheap': 1_700.0,   # SET stocks < 3 THB, swing 1-5 days (capital is locked)
+    'day':   1_700.0,   # SET stocks, day trade, flat by the close
 }
 
 # A bucket at 0 THB is paused, not deleted. Nothing scans it and no card asks
@@ -61,8 +61,8 @@ MAX_DAILY_LOSS   = 0.04    # realised + still-open risk that ends the day
 MAX_DAILY_TRADES = 2       # confirmed entries per day, all buckets together
 
 # Costs are paid per trade, so trading often is itself a strategy — a losing
-# one here. A 6% DW spread on a 1,000 THB ticket is 60 THB each way; taken
-# daily that is 1,200 THB a month, 40% of the whole account, before being
+# one here. A 6% DW spread on an 800 THB ticket is 48 THB each way; taken
+# daily that is 960 THB a month, 19% of the whole account, before being
 # right or wrong about anything. So a setup has to promise a multiple of what
 # it costs, or it is not a setup, it is a fee.
 MIN_EDGE_MULTIPLE = 3.0    # target must be N x the round trip it has to clear
@@ -82,7 +82,7 @@ def daily_loss_limit() -> float:
 #
 # Set to your own broker's rate — this is the one number here that is not a
 # strategy choice but a fact about your account. MIN_COMM is the daily floor:
-# a 50 THB minimum turns a 1,000 THB position into a 10% round trip, which no
+# a 50 THB minimum turns an 800 THB position into a 12% round trip, which no
 # intraday edge survives, so brokers that charge one are unusable at this size.
 #
 #   Finansia Syrus (current)  0.157%   no minimum
