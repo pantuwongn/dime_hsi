@@ -331,6 +331,30 @@ cool = intraday._score({'rvol': 3.1, 'change': 3.2, 'range_pos': 0.65,
                         'value_mb': 160.0, 'tick_pct': 0.8, 'rsi': 60.0})
 check('เรียงให้ตัวแรงกว่าขึ้นก่อน', hot > cool, True)
 
+# ------------------------------------------------------------------------------
+print('\nday — เป้าและจุดปิด')
+
+PLAN_ROW = {'close': 24.90, 'change': 9.0, 'atr': 1.25}
+plan = intraday._plan_prices(PLAN_ROW, intraday.series('day'))
+
+check('เพดานวันนี้ = +30% ของราคาปิดเมื่อวาน', plan['ceiling'], 29.5)
+check('  ไม่รู้ % วันนี้ → ไม่เดาเพดาน',
+      intraday.ceiling_price({'close': 10.0, 'change': None}), None)
+check('เรียงจากล่างขึ้นบน: SL < คุ้มทุน < TP1 < TP2 ≤ เพดาน',
+      plan['sl'] < plan['entry'] < plan['be'] < plan['tp1'] < plan['tp2']
+      <= plan['ceiling'], True)
+check('  คุ้มทุนสูงกว่าราคาซื้อเสมอ — ขายเท่าทุนคือขาดทุน',
+      plan['be'] > plan['entry'], True)
+check('  TP ที่ journal ใช้คือ TP1 ไม่ใช่ TP2', (plan['tp'], plan['tp1']),
+      (plan['tp1'], plan['tp1']))
+
+# ชนเพดานแล้วไม่มีที่ไปต่อ — เป้าต้องไม่โผล่เหนือเพดาน ไม่งั้นเป็นออร์เดอร์ที่ไม่มีวันได้คิว
+at_ceiling = intraday._plan_prices({'close': 12.90, 'change': 29.0, 'atr': 1.0},
+                                   intraday.series('day'))
+check('เป้าไม่โผล่เหนือเพดาน',
+      (at_ceiling['tp1'] <= at_ceiling['ceiling'],
+       at_ceiling['tp2'] <= at_ceiling['ceiling']), (True, True))
+
 check('  ไม้เดียวไม่เกินงบก้อนและไม่เกินโควตาเสี่ยง',
       (day['passed'][0]['cost'] <= config.ALLOC['day'],
        day['passed'][0]['risk_thb'] <= config.risk_thb()), (True, True))

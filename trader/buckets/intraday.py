@@ -206,20 +206,67 @@ def _score(m: dict) -> float:
     return s
 
 
+def ceiling_price(m: dict):
+    """
+    The highest price SET will print for this stock today: +30% on yesterday's
+    close. Derived from today's change, because the feed gives a percentage and
+    not the previous close. None when the change is missing — an unknown
+    ceiling is not the same as no ceiling, so callers must show it as unknown.
+    """
+    chg = m.get('change')
+    if chg is None or chg <= -100.0:
+        return None
+    prev = m['close'] / (1.0 + chg / 100.0)
+    return sizing.to_tick(prev * (1.0 + config.SET_CEILING_PCT / 100.0), 'down')
+
+
 def _plan_prices(m: dict, sr: dict = None) -> dict:
-    """Intraday levels, snapped onto the tick grid so they are placeable."""
+    """
+    Where to get out, in three places rather than one.
+
+    A single take-profit forces one choice to answer two different questions:
+    when has this paid enough to be worth having taken, and how far can it
+    actually go? So the plan carries both — half the position at TP1, the rest
+    left to TP2 — plus the two lines that decide whether the trade is even
+    alive: the break-even price after costs, and today's ceiling.
+
+    Everything is snapped onto the tick grid, because a target that is not on
+    the grid is a target the exchange will not fill.
+    """
     sr = sr or series()
-    atr = m['atr'] or (m['close'] * 0.03)
-    t = sizing.tick(m['close'])
-    tp = sizing.to_tick(m['close'] + max(atr * sr['tp_atr'], t * 3), 'up')
-    sl = max(t, sizing.to_tick(m['close'] - max(atr * sr['sl_atr'], t * 2), 'down'))
-    risk, reward = max(m['close'] - sl, t), tp - m['close']
+    entry = m['close']
+    atr = m['atr'] or (entry * 0.03)
+    t = sizing.tick(entry)
+
+    # A ceiling day has nowhere left to go, so targets are clipped to it: a
+    # limit sell above the ceiling is an order that sits there all day.
+    cap = ceiling_price(m)
+    def _clip(price):
+        return min(price, cap) if cap else price
+
+    tp1 = _clip(sizing.to_tick(entry + max(atr * sr['tp1_atr'], t * 3), 'up'))
+    tp2 = _clip(sizing.to_tick(entry + max(atr * sr['tp2_atr'], t * 6), 'up'))
+    sl = max(t, sizing.to_tick(entry - max(atr * sr['sl_atr'], t * 2), 'down'))
+
+    # Break-even is the price that pays the round trip back: commission twice,
+    # plus the tick you give up going in at the offer and out at the bid.
+    be = sizing.to_tick(entry * (1.0 + config.COMM_RATE * 2) + t, 'up')
+
+    risk, reward = max(entry - sl, t), tp1 - entry
     return {
-        'entry': round(m['close'], 2),
-        'tp': tp,
+        'entry': round(entry, 2),
+        'tp': tp1,                      # the target the journal and alerts use
+        'tp1': tp1,
+        'tp2': max(tp2, tp1),
         'sl': sl,
-        'tp_pct': reward / m['close'] * 100.0,
-        'sl_pct': -risk / m['close'] * 100.0,
+        'be': be,
+        'ceiling': cap,
+        'tp_pct': reward / entry * 100.0,
+        'tp1_pct': (tp1 - entry) / entry * 100.0,
+        'tp2_pct': (max(tp2, tp1) - entry) / entry * 100.0,
+        'be_pct': (be - entry) / entry * 100.0,
+        'ceiling_pct': ((cap - entry) / entry * 100.0) if cap else None,
+        'sl_pct': -risk / entry * 100.0,
         'rr': reward / risk,
         'max_loss_thb': 0.0,
         'risk_pct_account': 0.0,

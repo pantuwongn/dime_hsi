@@ -341,8 +341,8 @@ def show_intraday(record: bool, key: str = 'day') -> None:
     lines += ['', graph.divider(W, 'สั่งซื้อ')]
     m = res['passed'][0]
     lines += _entry_block(m, m['plan'], note=m['name'])
-    lines.append('  ' + ui.c(f"⚠  ปิดสถานะไม่เกิน {config.SESSIONS['eod_close']} น. "
-                             '— ก้อนนี้คิดมาสำหรับวันเดียว', 'yellow'))
+    lines += ['', graph.divider(W, 'ปิดตรงไหน')]
+    lines += _exit_ladder(m, m['plan'])
     _panel(f"{title} · {sr['note']}", lines, 'blue')
     if record:
         journal.record(key, {'action': 'SIGNAL', 'symbol': m['symbol'],
@@ -350,6 +350,58 @@ def show_intraday(record: bool, key: str = 'day') -> None:
                              'cost': m['cost'], 'tp': m['plan']['tp'],
                              'sl': m['plan']['sl'],
                              'risk_thb': m['plan']['max_loss_thb']})
+
+
+def _exit_ladder(m: dict, p: dict) -> list:
+    """
+    Every price at which this trade is over, in the order it can reach them.
+
+    A single TP answers one question and hides another: "is this enough" is not
+    the same question as "how far can it go". So the plan is written out as a
+    ladder, in baht as well as percent, because 4.2% and 105฿ do not feel like
+    the same number at 09:30 with the thing already running.
+    """
+    units = m['lots'] * config.BOARD_LOT
+    half = (m['lots'] // 2) * config.BOARD_LOT
+    rest = units - half
+
+    def line(label, price, pct, thb, note, tone):
+        return ('  ' + pad(label, 15) + ui.c(pad(f'{price:.2f}', 8), 'bold', tone)
+                + pad(f'{pct:+.1f}%', 8)
+                + ui.c(pad(f'{thb:+,.0f}฿' if thb is not None else '', 9), tone)
+                + ui.c(f'  {note}', 'dim'))
+
+    out = [line('ตัดขาดทุน', p['sl'], p['sl_pct'], (p['sl'] - p['entry']) * units,
+                'วางไว้ตั้งแต่ซื้อ อย่าขยับลง', 'bright_red'),
+           line('คุ้มทุน', p['be'], p['be_pct'], 0.0,
+                'ค่าคอมไปกลับ + 1 ช่องราคา', 'dim')]
+
+    if half:
+        out.append(line(f'TP1 ขาย {m["lots"] // 2} lot', p['tp1'], p['tp1_pct'],
+                        (p['tp1'] - p['entry']) * half,
+                        'เก็บกำไรครึ่งแรก แล้วเลื่อน SL ที่เหลือขึ้นมาคุ้มทุน',
+                        'bright_green'))
+        out.append(line(f'TP2 อีก {rest // config.BOARD_LOT} lot', p['tp2'],
+                        p['tp2_pct'], (p['tp2'] - p['entry']) * rest,
+                        'ส่วนที่ปล่อยให้วิ่ง', 'bright_green'))
+    else:
+        out.append(line('TP ขายทั้งไม้', p['tp1'], p['tp1_pct'],
+                        (p['tp1'] - p['entry']) * units,
+                        'ไม้เดียว แบ่งขายไม่ได้ — ถึงแล้วขายจบ', 'bright_green'))
+
+    if p.get('ceiling'):
+        room = p['ceiling_pct']
+        note = ('ชนเพดานคือจบเกมของวันนี้ — ไม่มีที่ไปต่อ'
+                if room > 0.5 else 'ชนเพดานแล้ว — ไม่มีที่ไปต่อวันนี้')
+        out.append(line('เพดานวันนี้', p['ceiling'], room,
+                        (p['ceiling'] - p['entry']) * units, note, 'yellow'))
+
+    out.append('  ' + pad('หมดเวลา', 15)
+               + ui.c(pad(config.SESSIONS['eod_close'], 8), 'bold', 'yellow')
+               + ui.c('   ไม่ถึงอะไรเลยก็ปิด — ก้อนนี้คิดมาสำหรับวันเดียว', 'dim'))
+    out.append('  ' + ui.c('วางขาย TP1 เป็น limit ทันทีหลังซื้อ ส่วน SL ต้องกดเอง '
+                           '— สคริปต์ไม่ได้ขายให้', 'yellow'))
+    return out
 
 
 def _stale_line(bucket: str) -> list:

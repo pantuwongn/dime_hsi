@@ -172,10 +172,11 @@ CHEAP_MIN_RR     = 1.5            # target must clear the stop by 1.5x
 #   min_change     % up on the day before it is worth looking at
 #   max_change     % up on the day past which you are buying someone's exit
 #   min_range_pos  0..1, where the price sits between today's low and high
-#   tp_atr/sl_atr  target and stop as multiples of today's ATR. A stock that
-#                  is running has a big ATR already, so both are wider than a
-#                  quiet-market scalp would use: the trade is the move, and a
-#                  stop inside the noise gets hit by the noise
+#   tp1_atr        first target, as a multiple of today's ATR — sell half here
+#   tp2_atr        second target for the half left running
+#   sl_atr         stop, also in ATR. A stock that is running has a big ATR
+#                  already, so this is wider than a quiet-market scalp would
+#                  use: a stop inside the noise gets hit by the noise
 # ------------------------------------------------------------------------------
 DAY_MIN_VALUE    = 150_000_000.0  # a runner you cannot exit is not a runner
 DAY_MAX_PRICE    = 60.0           # further capped by what one board lot costs
@@ -184,8 +185,15 @@ DAY_MIN_RVOL     = 3.0            # today has to be 3x its own normal volume
 DAY_MIN_CHANGE   = 3.0            # % up on the day — it has to be moving NOW
 DAY_MAX_CHANGE   = 15.0           # past this you are the exit, not the entry
 DAY_MIN_RANGE_POS = 0.6           # where in today's range it sits, 1.0 = at high
-DAY_TP_ATR       = 1.2            # target as N x today's ATR — riding a move
+DAY_TP1_ATR      = 1.0            # first target — where half the position goes
+DAY_TP2_ATR      = 2.0            # second target for the half that runs
 DAY_SL_ATR       = 0.7            # stop, wide enough not to be noise
+
+# SET halts a stock at +/- 30% of yesterday's close. On a runner that is not
+# trivia: it is the highest price the day can print, so a target above it is a
+# target that cannot be filled, and a stock already near it has nothing left
+# to give today.
+SET_CEILING_PCT  = 30.0
 
 INTRADAY_SERIES = {
     'day': {
@@ -193,7 +201,7 @@ INTRADAY_SERIES = {
         'max_price': DAY_MAX_PRICE, 'max_tick_pct': DAY_MAX_TICK_PCT,
         'min_rvol': DAY_MIN_RVOL, 'min_change': DAY_MIN_CHANGE,
         'max_change': DAY_MAX_CHANGE, 'min_range_pos': DAY_MIN_RANGE_POS,
-        'tp_atr': DAY_TP_ATR, 'sl_atr': DAY_SL_ATR,
+        'tp1_atr': DAY_TP1_ATR, 'tp2_atr': DAY_TP2_ATR, 'sl_atr': DAY_SL_ATR,
         'note': 'ไล่ตัวที่กำลังวิ่งวันนี้ ปิดก่อนตลาดปิด',
     },
 }

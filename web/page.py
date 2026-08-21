@@ -209,8 +209,48 @@ def _intraday_card(d: dict) -> str:
                           '1 ช่อง', 'lot', 'ทุน ฿'], rows))
         m = d['passed'][0]
         out.append(_entry_rows(m, m['plan'], e(m['name'])))
+        out.append(_exit_ladder(m, m['plan']))
     out.append(cut_list(d['rejected']))
     return '<section class="card">' + ''.join(out) + '</section>'
+
+
+def _exit_ladder(m: dict, p: dict) -> str:
+    """Every price at which the trade is over, in the order it can reach them."""
+    if 'be' not in p:
+        return ''
+    units = m['lots'] * config.BOARD_LOT
+    half = (m['lots'] // 2) * config.BOARD_LOT
+    rows = [('ตัดขาดทุน', p['sl'], p['sl_pct'], (p['sl'] - p['entry']) * units,
+             'var(--down)', 'วางไว้ตั้งแต่ซื้อ อย่าขยับลง'),
+            ('คุ้มทุน', p['be'], p['be_pct'], None, 'var(--muted)',
+             'ค่าคอมไปกลับ + 1 ช่องราคา')]
+    if half:
+        rows.append((f'TP1 · ขาย {m["lots"] // 2} lot', p['tp1'], p['tp1_pct'],
+                     (p['tp1'] - p['entry']) * half, 'var(--up)',
+                     'แล้วเลื่อน SL ที่เหลือขึ้นมาคุ้มทุน'))
+        rows.append((f'TP2 · ที่เหลือ {(units - half) // config.BOARD_LOT} lot',
+                     p['tp2'], p['tp2_pct'], (p['tp2'] - p['entry']) * (units - half),
+                     'var(--up)', 'ส่วนที่ปล่อยให้วิ่ง'))
+    else:
+        rows.append(('TP · ขายทั้งไม้', p['tp1'], p['tp1_pct'],
+                     (p['tp1'] - p['entry']) * units, 'var(--up)',
+                     'ไม้เดียว แบ่งขายไม่ได้'))
+    if p.get('ceiling'):
+        rows.append(('เพดานวันนี้', p['ceiling'], p['ceiling_pct'],
+                     (p['ceiling'] - p['entry']) * units, 'var(--flat)',
+                     'ชนเพดานคือจบเกมของวันนี้'))
+
+    body = ''.join(
+        f'<dt>{e(label)}</dt><dd><b style="color:{colour}">{price:.2f}</b> '
+        f'<span style="opacity:.75">({pct:+.1f}%'
+        + (f' · {thb:+,.0f}฿' if thb is not None else '') + ')</span> '
+        f'<span style="opacity:.6">· {e(note)}</span></dd>'
+        for label, price, pct, thb, colour, note in rows)
+    body += (f'<dt>หมดเวลา</dt><dd><b>{config.SESSIONS["eod_close"]}</b> '
+             '<span style="opacity:.6">· ไม่ถึงอะไรเลยก็ปิด — '
+             'ก้อนนี้คิดมาสำหรับวันเดียว</span></dd>')
+    return ('<dl class="rows" style="margin-top:14px">'
+            '<dt style="opacity:.55">ปิดตรงไหน</dt><dd></dd>' + body + '</dl>')
 
 
 def _entry_rows(m: dict, p: dict, note: str) -> str:
