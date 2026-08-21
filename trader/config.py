@@ -13,25 +13,25 @@ BUDGET_TOTAL = 3_000.0
 
 ALLOC = {
     'dw':      500.0,   # HSI DW, day trade, capital recycles daily
-    'cheap': 1_000.0,   # SET stocks < 3 THB, swing 1-5 days (capital is locked)
-    'dr':        0.0,   # Thai DR — paused, see below
     's50':     500.0,   # SET50 DW, day trade, same engine as HSI DW
-    'day':   1_000.0,   # SET stocks, day trade, same engine as the DR bucket
+    'cheap': 1_000.0,   # SET stocks < 3 THB, swing 1-5 days (capital is locked)
+    'day':   1_000.0,   # SET stocks, day trade, flat by the close
 }
 
 # A bucket at 0 THB is paused, not deleted. Nothing scans it and no card asks
 # to be traded, but the journal keeps its history and --review still scores it,
-# so turning it back on is one number here rather than a code change.
+# so pausing or resuming one is a number here rather than a code change.
 #
-# DR is paused because it does not fit this account any more: a board lot is
-# 100 units, so a DR at 12 THB is a 1,200 THB ticket — most of the account in
-# one day trade. Give it money back only alongside a DR_MAX_PRICE that a lot
-# of the allocation can actually buy.
-BUCKET_ORDER = ('dw', 'cheap', 'dr', 's50', 'day')
+# Two thirds of the money is in buckets that are flat by the close, which is
+# the point: this account trades the day, and the swing bucket is what is left
+# over rather than the main event.
+BUCKET_ORDER = ('dw', 's50', 'cheap', 'day')
 
 # Kept to 10 terminal cells: these are table cells as well as panel titles.
-BUCKET_LABEL = {'dw': 'A · DW HSI', 'cheap': 'B · หุ้น', 'dr': 'C · DR',
-                's50': 'D · DW S50', 'day': 'E · หุ้นเดย์'}
+# The letters follow display order — the journal keys (dw, s50, cheap, day)
+# are what history is written under and never change.
+BUCKET_LABEL = {'dw': 'A · DW HSI', 's50': 'B · DW S50',
+                'cheap': 'C · หุ้นสวิง', 'day': 'D · หุ้นเดย์'}
 
 
 def active_buckets(want=None) -> tuple:
@@ -142,12 +142,12 @@ CHEAP_HOLD_DAYS  = 5
 CHEAP_MIN_RR     = 1.5            # target must clear the stop by 1.5x
 
 # ------------------------------------------------------------------------------
-# BUCKETS C and E — intraday, one entry per instrument type
+# BUCKET D — intraday, SET stocks
 #
-# Same engine, same question: is what gapped or ran this morning still being
-# bought, and does the move on offer clear one tick plus commission by enough
-# to be worth the ticket? Only the universe and how strict the gates are
-# differ, so that is all this table holds.
+# One question: is what ran this morning still being bought, and is the move on
+# offer bigger than one tick plus commission by enough to be worth the ticket?
+# The table is keyed by bucket so a second intraday universe (DR came and went;
+# stock warrants could come next) is an entry here, not a second scanner.
 #
 #   tv_type       TradingView's `type` for the instrument
 #   min_value     THB traded today, below which you cannot get out inside a day
@@ -155,19 +155,11 @@ CHEAP_MIN_RR     = 1.5            # target must clear the stop by 1.5x
 #   max_tick_pct  one tick as % of price — the floor under every round trip
 #   max_gap       % already moved at the open, beyond which you are chasing
 #   min_rvol      volume vs its own 10-day normal, below which nothing is up
-#   drop_nvdr     SET tags NVDR shadow lines as type 'dr' — filter them out
-#   dedupe_issuer several issuers list the same underlying (MRVL06, MRVL80)
 #
-# The stock bucket is stricter than DR on every gate that costs money: a DR is
-# taken for a gap that already happened abroad, while a Thai stock is taken for
-# a move still forming, and paying 1.5% a tick for that is a losing trade with
-# extra steps.
+# These gates are stricter than a swing trade's because the exit is hours away,
+# not days: a tick is 0.8% of the ticket here, and paying it for a move that
+# was over before the open is a losing trade with extra steps.
 # ------------------------------------------------------------------------------
-DR_MIN_VALUE     = 5_000_000.0
-DR_MAX_PRICE     = 40.0
-DR_MAX_GAP       = 9.0            # % — beyond this you are chasing, not trading
-DR_MAX_TICK_PCT  = 1.5            # one tick as % of price
-
 DAY_MIN_VALUE    = 100_000_000.0  # a day trade has to be exitable within hours
 DAY_MAX_PRICE    = 20.0
 DAY_MAX_GAP      = 6.0
@@ -175,18 +167,10 @@ DAY_MAX_TICK_PCT = 0.8            # 0.8% a tick + 0.31% commission is the floor
 DAY_MIN_RVOL     = 1.5            # today has to be busier than its own normal
 
 INTRADAY_SERIES = {
-    'dr': {
-        'name': 'DR', 'tv_type': 'dr', 'min_value': DR_MIN_VALUE,
-        'max_price': DR_MAX_PRICE, 'max_tick_pct': DR_MAX_TICK_PCT,
-        'max_gap': DR_MAX_GAP, 'min_rvol': 0.0,
-        'drop_nvdr': True, 'dedupe_issuer': True,
-        'note': 'เทรดตาม gap เปิดตลาด',
-    },
     'day': {
         'name': 'หุ้นไทย', 'tv_type': 'stock', 'min_value': DAY_MIN_VALUE,
         'max_price': DAY_MAX_PRICE, 'max_tick_pct': DAY_MAX_TICK_PCT,
         'max_gap': DAY_MAX_GAP, 'min_rvol': DAY_MIN_RVOL,
-        'drop_nvdr': False, 'dedupe_issuer': False,
         'note': 'โมเมนตัมในวัน ปิดก่อนตลาดปิด',
     },
 }

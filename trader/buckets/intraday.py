@@ -1,24 +1,24 @@
 """
-The intraday engine — bucket C (Thai DR) and bucket E (SET stocks), both
-bought and sold inside one session.
+The intraday engine — bucket D, SET stocks bought and sold inside one session.
 
-A DR tracks a foreign share that trades while SET is shut, so by the time
-you can act, the news is already in the price: the opening gap IS the move.
-A Thai stock is the other way round — the move is still forming while you
-watch it — but the question the screen has to answer is the same one: is
-this still being bought right now, and is what it is reaching for bigger
-than one tick plus commission? So it is one engine, driven by
-config.INTRADAY_SERIES, not two scanners that drift apart.
+The screen has one question to answer: is this still being bought right now,
+and is what it is reaching for bigger than one tick plus commission by enough
+to be worth the ticket? Momentum is the easy half; the gates that cost money
+are liquidity and the tick grid.
 
-Traps this has to handle:
-  * SET tags NVDRs as type 'dr' too. Of 1,353 rows, only ~115 are real DRs;
-    the rest are the '.R' shadow lines of ordinary Thai stocks.
-  * DR symbols go stale fast. Issuers delist and relist under new codes, so
-    the universe is always fetched live and never hardcoded.
-  * A board lot is 100 units in both buckets, so the money in the bucket —
-    not the price ceiling in config — is what really decides how expensive a
-    name is allowed to be. The screen is capped at what one lot can buy, and
-    says so, rather than listing names and rejecting them one by one.
+Two things this has to get right:
+  * A board lot is 100 units, so the money in the bucket — not the price
+    ceiling in config — is what really decides how expensive a name may be.
+    The screen is capped at what one lot can buy, and says so, rather than
+    listing names and rejecting them one at a time.
+  * SET's tick grid is a staircase, so a stock just above a step pays the most
+    per tick: 2.02 THB moves 0.02 (1.0%) while 4.98 THB moves the same 0.02
+    (0.4%). The tick gate is what keeps the cheap-looking, expensive-to-trade
+    names out.
+
+It stays keyed by config.INTRADAY_SERIES: a second intraday universe (Thai DR
+was one until the account got too small for a 100-unit lot of it) is an entry
+in that table, not a second scanner to keep in sync.
 """
 
 from .. import config, sizing
@@ -33,7 +33,7 @@ _COLS = [
 ]
 
 
-def series(key: str = 'dr') -> dict:
+def series(key: str = 'day') -> dict:
     """The config entry for one intraday series, by bucket key."""
     try:
         return config.INTRADAY_SERIES[key]
@@ -42,7 +42,7 @@ def series(key: str = 'dr') -> dict:
                        f"มีแค่ {', '.join(config.INTRADAY_SERIES)}")
 
 
-def scan(key: str = 'dr', budget: float = None, risk_thb: float = None,
+def scan(key: str = 'day', budget: float = None, risk_thb: float = None,
          cash: float = None, exclude=()) -> dict:
     sr = series(key)
     budget = config.ALLOC[key] if budget is None else budget
@@ -57,9 +57,8 @@ def scan(key: str = 'dr', budget: float = None, risk_thb: float = None,
                                 else 'ถืออยู่แล้ว — เงินก้อนนี้ยังไม่ว่าง')
                for k in exclude}
 
-    empty = {'passed': [], 'rejected': [], 'dupes': [], 'universe': 0,
-             'nvdr_filtered': 0, 'cash': cap, 'price_cap': price_cap,
-             'series': sr['name']}
+    empty = {'passed': [], 'rejected': [], 'universe': 0, 'cash': cap,
+             'price_cap': price_cap, 'series': sr['name']}
     if price_cap <= 0:
         return empty
 
@@ -73,13 +72,9 @@ def scan(key: str = 'dr', budget: float = None, risk_thb: float = None,
         columns=_COLS, market='thailand', limit=300,
     )
 
-    passed, rejected, nvdr = [], [], 0
+    passed, rejected = [], []
     for r in rows:
         sym = r.get('name') or r['_ticker'].split(':')[-1]
-        if sr['drop_nvdr'] and sym.endswith('.R'):   # shadow line, not a DR
-            nvdr += 1
-            continue
-
         close = num(r, 'close')
         if close is None:
             continue
@@ -97,7 +92,6 @@ def scan(key: str = 'dr', budget: float = None, risk_thb: float = None,
             'atr': num(r, 'ATR'),
             'perf_w': num(r, 'Perf.W'),
             'rec': num(r, 'Recommend.All'),
-            'issuer': ''.join(ch for ch in sym[-2:] if ch.isdigit()),
             'lots': 0, 'cost': 0.0, 'risk_thb': 0.0,
         }
         m['tick_pct'] = sizing.tick(close) / close * 100.0
@@ -139,11 +133,8 @@ def scan(key: str = 'dr', budget: float = None, risk_thb: float = None,
             passed.append(m)
 
     passed.sort(key=lambda x: -x['score'])
-    dupes = []
-    if sr['dedupe_issuer']:
-        passed, dupes = _dedupe_underlying(passed)
-    return {**empty, 'passed': passed, 'rejected': rejected, 'dupes': dupes,
-            'universe': len(rows) - nvdr, 'nvdr_filtered': nvdr}
+    return {**empty, 'passed': passed, 'rejected': rejected,
+            'universe': len(rows)}
 
 
 def _cost_pct(m: dict) -> float:
@@ -159,23 +150,6 @@ def _no_lot_reason(m: dict, plan: dict, risk_thb: float, cap: float) -> str:
     if per_lot_cost > cap:
         return f"เงินว่าง {cap:,.0f}฿ ไม่พอ 1 lot (ต้อง {per_lot_cost:,.0f}฿)"
     return f"1 lot เสี่ยง {per_lot_risk:,.0f}฿ — เกินโควตา {risk_thb:,.0f}฿/ไม้"
-
-
-def _dedupe_underlying(ranked: list) -> tuple:
-    """
-    The same foreign share is often listed by several issuers — MRVL06 and
-    MRVL80 are both Marvell. Recommending both is one position pretending to
-    be two, so keep the best-scoring line per underlying and note the rest.
-    """
-    seen, keep, dropped = {}, [], []
-    for m in ranked:
-        base = m['symbol'][:-len(m['issuer'])] if m['issuer'] else m['symbol']
-        if base in seen:
-            dropped.append((m['symbol'], seen[base]))
-            continue
-        seen[base] = m['symbol']
-        keep.append(m)
-    return keep, dropped
 
 
 def _score(m: dict) -> float:

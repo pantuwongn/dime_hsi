@@ -255,34 +255,8 @@ check('เงินว่างไม่พอ 1 lot → ไม่แนะน�
 check('  เหตุผลอ้างเงินว่าง ไม่ใช่งบเต็ม',
       'เงินว่าง' in r['rejected'][0]['reject'], True)
 
-DR_ROWS = [{
-    '_ticker': 'SET:BIDU01', 'name': 'BIDU01', 'description': 'Baidu Shs',
-    'close': 8.85, 'change': 0.6, 'gap': 0.6, 'Value.Traded': 2e7,
-    'relative_volume_10d_calc': 5.4, 'RSI': 55.0, 'MACD.macd': 0.0,
-    'MACD.signal': 0.0, 'EMA9': 8.8, 'EMA21': 8.6, 'ATR': 0.35,
-    'Perf.W': 1.0, 'Recommend.All': 0.3,
-}, {
-    '_ticker': 'SET:TTB.R', 'name': 'TTB.R', 'description': 'NVDR line',
-    'close': 1.80, 'change': 0.0, 'gap': 0.0, 'Value.Traded': 9e7,
-    'relative_volume_10d_calc': 1.0, 'RSI': 50.0, 'ATR': 0.03,
-    'Perf.W': 0.0, 'Recommend.All': 0.1,
-}]
-intraday.tv.screen = scan_rows(DR_ROWS)
-
-# DR ถูกพักอยู่ (งบ 0) จึงต้องบอกงบตรง ๆ ไม่งั้นไม่มีอะไรให้สแกน
-r = intraday.scan('dr', budget=1300.0, cash=1300.0)
-check('NVDR ถูกกรองออกจากจักรวาล DR', r['nvdr_filtered'], 1)
-check('  ก้อนที่พักอยู่ ไม่ยิงฟีดถ้าไม่บอกงบมาเอง',
-      intraday.scan('dr')['universe'], 0)
-check('  เหลือ DR จริง', r['universe'], 1)
-check('DR ที่เพิ่งโดน SL วันนี้ถูกกัน',
-      [m['symbol'] for m in intraday.scan(
-          'dr', budget=1300.0, cash=1300.0,
-          exclude={'BIDU01': 'เพิ่งโดน SL'})['passed']], [])
-
-
 # ------------------------------------------------------------------------------
-print('\nday — หุ้นไทยเดย์เทรด ใช้เครื่องเดียวกับ DR')
+print('\nday — หุ้นไทยเดย์เทรด')
 
 
 def stock(sym, close, rvol=2.5, value=3e8, atr=None, gap=1.0, rsi=57.0):
@@ -329,8 +303,6 @@ why = {r['symbol']: r['reject'] for r in day['rejected']}
 check('  RVOL ต่ำถูกตัด', 'RVOL' in why.get('BBB', ''), True)
 check('  1 ช่องราคาหยาบถูกตัด', '1 ช่องราคา' in why.get('CCC', ''), True)
 check('  gap ไปไกลแล้วถูกตัด', 'gap' in why.get('DDD', ''), True)
-check('  ไม่มีการกรอง NVDR ในก้อนหุ้น', day['nvdr_filtered'], 0)
-check('  ไม่รวมชื่อซ้ำแบบ DR (คนละเรื่องกัน)', day['dupes'], [])
 check('  ไม้เดียวไม่เกินงบก้อนและไม่เกินโควตาเสี่ยง',
       (day['passed'][0]['cost'] <= config.ALLOC['day'],
        day['passed'][0]['risk_thb'] <= config.risk_thb()), (True, True))
@@ -339,6 +311,10 @@ check('ก้อนเดย์เทรดยึดเวลา SET', session.B
 check('  ค้างข้ามคืนมีคำเตือน',
       'วันเดียว' in marks._alert({'bucket': 'day', 'days_held': 1, 'hit_sl': False,
                                   'hit_tp': False, 'stale': False, 'now': 5.0}), True)
+check('ตัวที่เพิ่งโดน SL วันนี้ถูกกันไว้',
+      [m['symbol'] for m in intraday.scan(
+          'day', cash=config.ALLOC['day'],
+          exclude={'AAA': 'เพิ่งโดน SL'})['passed']], [])
 
 
 # ------------------------------------------------------------------------------
@@ -366,7 +342,7 @@ check('  และบอกว่าเป็นราคาปิดวัน�
 check('ตอนเปิดจริงไม่มีคำเตือนรก',
       session.bucket_note('cheap', session.state(at('2026-08-18 10:30'))), '')
 check('ตอนปิดเตือนพร้อมรอบถัดไป',
-      '10:15' in session.bucket_note('dr', session.state(at('2026-08-18 22:00'))), True)
+      '10:15' in session.bucket_note('day', session.state(at('2026-08-18 22:00'))), True)
 
 
 # ------------------------------------------------------------------------------
@@ -436,6 +412,13 @@ for i in range(12):
 check('พอครบตัวอย่าง กล้าบอกให้ตัดทิ้ง',
       'ตัดก้อนนี้ทิ้ง' in review.summarise(many)['by_bucket']['cheap']['verdict'], True)
 
+old = [row('ENTER', 'BIDU01', bucket='dr', entry=8.85, lots=1, cost=885.0),
+       row('EXIT', 'BIDU01', bucket='dr', exit=9.10, lots=1, cost=885.0,
+           fees=3.0, pnl=22.0)]
+retired = review.summarise(old)
+check('ก้อนที่ถูกตัดออกไปแล้ว ยังอยู่ในตารางผลงาน', 'dr' in retired['by_bucket'], True)
+check('  และตัวเลขไม่หายไปจากยอดรวม', round(retired['overall']['net']), 22)
+
 
 # ------------------------------------------------------------------------------
 print('\nงบ — ก้อนที่พักต้องไม่ถูกสแกน')
@@ -443,14 +426,12 @@ print('\nงบ — ก้อนที่พักต้องไม่ถูก
 check('ALLOC รวมไม่เกินทุน', sum(config.ALLOC.values()) <= config.BUDGET_TOTAL, True)
 check('ก้อนที่มีงบเท่านั้นที่ทำงาน', config.active_buckets(),
       tuple(b for b in config.BUCKET_ORDER if config.ALLOC[b] > 0))
-check('  ก้อนงบ 0 ถูกตัดออก แม้ขอมาตรง ๆ',
-      config.active_buckets(('dr',)) if config.ALLOC['dr'] <= 0 else (), ())
-
 _saved = dict(config.ALLOC)
 config.ALLOC.update({k: 0.0 for k in config.ALLOC})
-config.ALLOC.update({'cheap': 1_000.0, 'dr': 500.0})
+check('  ก้อนงบ 0 ถูกตัดออก แม้ขอมาตรง ๆ', config.active_buckets(('cheap',)), ())
+config.ALLOC.update({'cheap': 1_000.0, 'day': 500.0})
 check('  ปิด/เปิดก้อนได้จาก ALLOC อย่างเดียว', config.active_buckets(),
-      ('cheap', 'dr'))
+      ('cheap', 'day'))
 config.ALLOC.clear()
 config.ALLOC.update(_saved)
 

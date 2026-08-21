@@ -106,8 +106,13 @@ def summarise(rows: list = None) -> dict:
     rows = load() if rows is None else rows
     trades = closed_trades(rows)
 
+    # Every configured bucket, plus any the journal remembers that config no
+    # longer lists. A bucket that was removed still traded real money, and a
+    # scoreboard that silently drops its rows is a scoreboard you cannot trust.
+    retired = [b for b in dict.fromkeys(t['bucket'] for t in trades)
+               if b and b not in config.BUCKET_ORDER]
     by_bucket = {}
-    for b in config.BUCKET_ORDER:
+    for b in tuple(config.BUCKET_ORDER) + tuple(retired):
         by_bucket[b] = _stats([t for t in trades if t['bucket'] == b])
 
     signals = sum(1 for r in rows if r.get('action') == 'SIGNAL')

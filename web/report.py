@@ -66,7 +66,7 @@ def _cheap() -> dict:
     return res
 
 
-def _intraday(key: str = 'dr') -> dict:
+def _intraday(key: str = 'day') -> dict:
     sr = intraday.series(key)
     cash, held = _free(key)
     res = intraday.scan(key, cash=cash, exclude=held)

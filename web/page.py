@@ -42,11 +42,11 @@ def _score_card(s: dict) -> str:
         return ''
     label = config.BUCKET_LABEL
     rows = []
-    for b in config.BUCKET_ORDER:
+    for b in s['by_bucket']:
         st = s['by_bucket'][b]
         colour = ('var(--up)' if st['net'] > 0
                   else 'var(--down)' if st['net'] < 0 else 'var(--muted)')
-        rows.append([f'<b>{label[b]}</b>', st['n'], st['wins'],
+        rows.append([f'<b>{e(label.get(b, b))}</b>', st['n'], st['wins'],
                      (f"{n(st['hit_rate'], 0)}%" if st['hit_rate'] is not None else '—'),
                      n(st['fees'], 0),
                      f'<span style="color:{colour}">{n(st["net"], 0)}</span>',
@@ -152,8 +152,9 @@ def _swing_card(d: dict) -> str:
     if d is None:
         return ''
     tail = ' + '.join(m['symbol'] for m in d['passed'][:2]) or 'ถือเงินสด'
-    out = [f'<h2>ก้อน B · หุ้นไทย &lt; {config.CHEAP_MAX_PRICE:.0f} บาท '
-           f'<small>สวิง {config.CHEAP_HOLD_DAYS} วัน</small></h2>',
+    out = [f'<h2>ก้อน {e(config.BUCKET_LABEL["cheap"])} '
+           f'<small>หุ้นไทย &lt; {config.CHEAP_MAX_PRICE:.0f} บาท · '
+           f'สวิง {config.CHEAP_HOLD_DAYS} วัน</small></h2>',
            badge(d['verdict'], tail),
            f'<p class="stamp">ผ่านด่านสภาพคล่อง {d["universe"]} ตัว จาก ~430 ตัว '
            f'(ต้องซื้อขาย &gt; {config.CHEAP_MIN_VALUE / 1e6:.0f} ลบ./วัน)</p>']
@@ -179,12 +180,10 @@ def _intraday_card(d: dict) -> str:
         return ''
     name = d.get('series', 'DR')
     tail = d['passed'][0]['symbol'] if d['passed'] else 'ถือเงินสด'
-    stamp = (f'{e(name)} ที่มีสภาพคล่อง {d["universe"]} ตัว · '
+    stamp = (f'{e(name)}ที่มีสภาพคล่อง {d["universe"]} ตัว · '
              f'ราคา ≤ {d["price_cap"]:,.2f}฿ (1 lot = 100 หน่วย) · '
              f'มูลค่าซื้อขาย ≥ {d.get("min_value_mb", 0):,.0f} ลบ.')
-    if d['nvdr_filtered']:
-        stamp += f' · กรอง NVDR ออก {d["nvdr_filtered"]} รายการ'
-    out = [f'<h2>ก้อน {e(d.get("label", "C · DR"))} '
+    out = [f'<h2>ก้อน {e(d.get("label", "D · หุ้นเดย์"))} '
            f'<small>{e(d.get("note", ""))}</small></h2>',
            badge(d['verdict'], tail),
            f'<p class="stamp">{stamp}</p>']
@@ -218,7 +217,7 @@ def render(brief: dict) -> str:
     ts = brief['generated_at']
     # Short names here — this strip sits above the fold on a phone.
     short = {'dw': 'DW HSI', 's50': 'DW S50', 'cheap': 'หุ้นสวิง',
-             'dr': 'DR', 'day': 'หุ้นเดย์'}
+             'day': 'หุ้นเดย์'}
     alloc = ''.join(
         f'<span>{short.get(k, k)} <b>{brief["budget"][k]:,.0f}฿</b></span>'
         if brief['budget'].get(k, 0) > 0 else

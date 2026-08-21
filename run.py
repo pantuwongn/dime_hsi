@@ -238,7 +238,8 @@ def show_cheap(record: bool) -> None:
     try:
         res = cheap.scan(cash=cash, exclude=_exclude('cheap', held))
     except tv.FeedError as e:
-        _panel('ก้อน B · หุ้นไทยราคาต่ำ', [ui.c(f'✗ ดึงข้อมูลไม่ได้: {e}', 'bright_red')], 'red')
+        _panel(f"ก้อน {config.BUCKET_LABEL['cheap']}",
+               [ui.c(f'✗ ดึงข้อมูลไม่ได้: {e}', 'bright_red')], 'red')
         return
 
     lines = _stale_line('cheap')
@@ -250,7 +251,8 @@ def show_cheap(record: bool) -> None:
     if not res['passed']:
         lines += [''] + big_badge('wait', 'ไม่มีตัวไหนผ่านเกณฑ์โมเมนตัม → ถือเงินสด')
         lines += _rejects(res['rejected'])
-        _panel('ก้อน B · หุ้นไทย < 3฿ · สวิง', lines, 'yellow')
+        _panel(f"ก้อน {config.BUCKET_LABEL['cheap']} · "
+               f"หุ้นไทย < {config.CHEAP_MAX_PRICE:.0f}฿", lines, 'yellow')
         return
 
     lines += [''] + big_badge('buy', ' + '.join(m['symbol'] for m in res['passed'][:2]))
@@ -276,20 +278,21 @@ def show_cheap(record: bool) -> None:
                                      'cost': m['cost'], 'tp': m['plan']['tp'],
                                      'sl': m['plan']['sl'],
                                      'risk_thb': m['plan']['max_loss_thb']})
-    _panel(f"ก้อน B · หุ้นไทย < {config.CHEAP_MAX_PRICE:.0f}฿ · "
+    _panel(f"ก้อน {config.BUCKET_LABEL['cheap']} · "
+           f"หุ้นไทย < {config.CHEAP_MAX_PRICE:.0f}฿ · "
            f"สวิง {config.CHEAP_HOLD_DAYS} วัน", lines, 'green')
 
 
 # ------------------------------------------------------------------------------
-# BUCKETS C and E — intraday (DR, หุ้นไทยเดย์เทรด)
+# BUCKET D — หุ้นไทยเดย์เทรด
 # ------------------------------------------------------------------------------
 
-_DR_W = [10, 15, 7, 6, 12, 12, 7, 5, 7]
-_DR_H = ['symbol', 'ชื่อ', 'ราคา', 'gap%', 'RVOL', 'RSI', '1 ช่อง%', 'lot', 'ทุน฿']
-_fit(_DR_W, 'ตาราง intraday')
+_DAY_W = [10, 15, 7, 6, 12, 12, 7, 5, 7]
+_DAY_H = ['symbol', 'ชื่อ', 'ราคา', 'gap%', 'RVOL', 'RSI', '1 ช่อง%', 'lot', 'ทุน฿']
+_fit(_DAY_W, 'ตาราง intraday')
 
 
-def show_intraday(record: bool, key: str = 'dr') -> None:
+def show_intraday(record: bool, key: str = 'day') -> None:
     sr = intraday.series(key)
     title = f"ก้อน {config.BUCKET_LABEL[key]}"
     held = [p for p in risk.open_positions() if p.get('bucket') == key]
@@ -301,20 +304,13 @@ def show_intraday(record: bool, key: str = 'dr') -> None:
         return
 
     lines = _stale_line(key)
-    head = '  ' + ui.c(f"{sr['name']} ที่มีสภาพคล่อง {res['universe']} ตัว", 'bold')
-    if res['nvdr_filtered']:
-        head += ui.c(f"  กรอง NVDR ออก {res['nvdr_filtered']} รายการ", 'dim')
-    lines += [head]
+    lines += ['  ' + ui.c(f"{sr['name']}ที่มีสภาพคล่อง {res['universe']} ตัว", 'bold')]
     lines += _cash_line(held, cash, config.ALLOC[key])
     # The money, not config, is what caps how expensive a name may be — 1 lot
     # is 100 units, so say the ceiling instead of listing names to reject.
     lines.append('  ' + ui.c(f"คัดเฉพาะราคา ≤ {res['price_cap']:,.2f}฿ "
                              f"(1 lot = 100 หน่วย ต้องอยู่ในเงินว่าง)  ·  "
                              f"มูลค่าซื้อขายขั้นต่ำ {sr['min_value'] / 1e6:,.0f} ลบ.", 'dim'))
-    if res.get('dupes'):
-        dupe_txt = ', '.join(f'{a}→{b}' for a, b in res['dupes'][:4])
-        lines.append('  ' + ui.c(f'รวมหุ้นแม่ซ้ำ: {dupe_txt}', 'dim'))
-
     if not res['passed']:
         lines += [''] + big_badge('wait', f"ไม่มี{sr['name']}ตัวไหนผ่านเกณฑ์ → ถือเงินสด")
         lines += _rejects(res['rejected'])
@@ -323,13 +319,13 @@ def show_intraday(record: bool, key: str = 'dr') -> None:
 
     lines += [''] + big_badge('buy', res['passed'][0]['symbol'])
 
-    lines += ['', ui.c(_row(_DR_H, _DR_W), 'bold')]
+    lines += ['', ui.c(_row(_DAY_H, _DAY_W), 'bold')]
     for m in res['passed'][:6]:
         lines.append(_row([
             m['symbol'], m['name'][:14], ui.fmt(m['close']), ui.fmt(m['gap'], 1),
             bar(m['rvol'], 4.0, 8, 'magenta') + f" {ui.fmt(m['rvol'], 1)}",
             rsi_gauge(m['rsi'], 8) + f" {ui.fmt(m['rsi'], 0)}",
-            ui.fmt(m['tick_pct'], 2), m['lots'], ui.fmt(m['cost'], 0)], _DR_W))
+            ui.fmt(m['tick_pct'], 2), m['lots'], ui.fmt(m['cost'], 0)], _DAY_W))
 
     lines += ['', graph.divider(W, 'สั่งซื้อ')]
     m = res['passed'][0]
@@ -430,8 +426,7 @@ def show_positions(st: dict) -> None:
 
 # Short enough that four buckets still fit one line of the header.
 _ALLOC_LABEL = {'dw': ('HSI', 'red'), 's50': ('S50', 'magenta'),
-                'cheap': ('สวิง', 'green'), 'dr': ('DR', 'blue'),
-                'day': ('วัน', 'cyan')}
+                'cheap': ('สวิง', 'green'), 'day': ('วัน', 'cyan')}
 
 
 def _vwidth(text: str) -> int:
@@ -515,12 +510,12 @@ def cmd_review() -> int:
                     + f"   เก็บข้อมูลมา {s['days']} วัน", 'dim'),
              '']
     lines.append(ui.c(_row(_REV_H, _REV_W), 'bold'))
-    for b in config.BUCKET_ORDER:
+    for b in s['by_bucket']:
         st = s['by_bucket'][b]
         tone = ('bright_green' if st['net'] > 0
                 else 'bright_red' if st['net'] < 0 else 'dim')
         lines.append(_row([
-            _BUCKET_LABEL[b], st['n'], st['wins'],
+            _BUCKET_LABEL.get(b, b), st['n'], st['wins'],
             ui.fmt(st['hit_rate'], 0) + ('%' if st['hit_rate'] is not None else ''),
             ui.fmt(st['avg_win'], 0), ui.fmt(st['avg_loss'], 0),
             ui.fmt(st['fees'], 0),
@@ -528,11 +523,12 @@ def cmd_review() -> int:
             ui.c(f"{st['expectancy']:+,.0f}", tone)], _REV_W))
 
     lines += ['', graph.divider(W, 'ควรทำอะไรต่อ')]
-    for b in config.BUCKET_ORDER:
+    for b in s['by_bucket']:
         st = s['by_bucket'][b]
         tone = ('dim' if st['n'] < review.MIN_SAMPLE
                 else 'bright_green' if st['expectancy'] > 0 else 'bright_red')
-        lines.append('  ' + pad(_BUCKET_LABEL[b], 12) + ui.c(st['verdict'], tone))
+        lines.append('  ' + pad(_BUCKET_LABEL.get(b, b), 12)
+                     + ui.c(st['verdict'], tone))
 
     o = s['overall']
     if o['n']:
