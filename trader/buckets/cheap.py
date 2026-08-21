@@ -4,7 +4,7 @@ Bucket B — SET stocks under 3 THB, swing held a few days.
 The filter matters more than the signal here. There are ~430 SET stocks
 under 3 THB and almost all of them are untradeable: a stock at 0.02 THB moves
 one tick and you are down 50%, and a stock turning over 2 MB a day cannot be
-exited in size that matters even on a 5,000 THB account.
+exited in size that matters even on a 3,000 THB account.
 
 So: liquidity gate first, momentum second, and the stop before the size —
 the allocation is a ceiling, not an amount to spend.

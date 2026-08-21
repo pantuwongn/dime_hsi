@@ -9,12 +9,12 @@ pure logic.
 # ------------------------------------------------------------------------------
 # CAPITAL — total account is intentionally small, so allocation is a hard gate
 # ------------------------------------------------------------------------------
-BUDGET_TOTAL = 5_000.0
+BUDGET_TOTAL = 3_000.0
 
 ALLOC = {
-    'dw':    1_200.0,   # HSI DW, day trade, capital recycles daily
-    'dr':    1_300.0,   # Thai DR, day trade / overnight-gap trade
-    'cheap': 2_500.0,   # SET stocks < 3 THB, swing 1-5 days (capital is locked)
+    'dw':      700.0,   # HSI DW, day trade, capital recycles daily
+    'dr':      800.0,   # Thai DR, day trade / overnight-gap trade
+    'cheap': 1_500.0,   # SET stocks < 3 THB, swing 1-5 days (capital is locked)
 }
 
 BOARD_LOT = 100         # SET board lot for stocks, DW and DR alike
@@ -38,8 +38,8 @@ MAX_DAILY_LOSS   = 0.04    # realised + still-open risk that ends the day
 MAX_DAILY_TRADES = 2       # confirmed entries per day, all buckets together
 
 # Costs are paid per trade, so trading often is itself a strategy — a losing
-# one here. A 6% DW spread on a 1,200 THB ticket is 72 THB each way; taken
-# daily that is 1,440 THB a month, 29% of the whole account, before being
+# one here. A 6% DW spread on a 700 THB ticket is 42 THB each way; taken
+# daily that is 840 THB a month, 28% of the whole account, before being
 # right or wrong about anything. So a setup has to promise a multiple of what
 # it costs, or it is not a setup, it is a fee.
 MIN_EDGE_MULTIPLE = 3.0    # target must be N x the round trip it has to clear
@@ -59,7 +59,7 @@ def daily_loss_limit() -> float:
 #
 # Set to your own broker's rate — this is the one number here that is not a
 # strategy choice but a fact about your account. MIN_COMM is the daily floor:
-# a 50 THB minimum turns a 1,200 THB position into an 8% round trip, which no
+# a 50 THB minimum turns a 700 THB position into a 14% round trip, which no
 # intraday edge survives, so brokers that charge one are unusable at this size.
 #
 #   Finansia Syrus (current)  0.157%   no minimum

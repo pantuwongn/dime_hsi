@@ -2,7 +2,7 @@
 Daily risk state, read back out of the journal.
 
 Position sizing decides what one mistake costs. This decides how many mistakes
-a day is allowed to contain, which on an account this size matters more: 5,000
+a day is allowed to contain, which on an account this size matters more: 3,000
 THB does not disappear on one bad trade, it disappears on the third trade taken
 to win back the first two. So the limit is enforced by the tool rather than by
 remembering to be disciplined at 10am with a red screen in front of you.
