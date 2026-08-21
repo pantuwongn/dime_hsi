@@ -17,8 +17,9 @@ import tempfile
 os.environ['NO_COLOR'] = '1'
 os.environ.setdefault('DIME_JOURNAL', os.path.join(tempfile.mkdtemp(), 'j.jsonl'))
 
-from trader import config, review, risk, sizing            # noqa: E402
-from trader.buckets import cheap, dr, dw_hsi               # noqa: E402
+from trader import config, marks, review, risk, session, sizing   # noqa: E402
+from trader.buckets import cheap, dr, dw                   # noqa: E402
+from trader.feeds import thaidw                            # noqa: E402
 
 FAILED = []
 
@@ -74,9 +75,17 @@ FIXTURE = [
     warrant('HSI28C2701D', 0.92, 1.00, 0.0387, '28 Jan 27', 10.0),  # เป้าไม่คุ้ม
     warrant('HSI28C2609N', 0.00, 0.05, 0.010),                    # ไม่มี bid
 ]
-dw_hsi.thaidw.hsi_warrants = lambda: FIXTURE
+# SET50 sits near 1,000 points, not 25,000, so a DW on it moves a lot more
+# baht per index point than an HSI one — sensitivity is per 100 index points.
+S50_FIXTURE = [
+    # issuer 13 — not one of the two that make the HSI market
+    {**warrant('S5013C2512A', 0.60, 0.62, 0.60, '26 Dec 26'), 'strike': 1_050.0},
+    {**warrant('S5028C2511B', 0.10, 0.13, 0.20, '27 Nov 26'), 'strike': 1_100.0},
+]
+BOOKS = {'HSI': FIXTURE, 'S50': S50_FIXTURE}
+thaidw.warrants = lambda underlying='HSI': BOOKS[underlying]
 
-res = dw_hsi.screen_warrants('C', SIG)
+res = dw.screen_warrants('C', SIG)
 check('ผ่านเฉพาะตัวที่เทรดได้จริง',
       [w['symbol'] for w in res['passed']], ['HSI28C2610A'])
 why = {r['symbol']: r['reject'] for r in res['rejected']}
@@ -94,11 +103,74 @@ check('สุทธิหัก "คอม" อย่างเดียว ไ�
       round(plan['tp_net_pct'], 2) == round(gross - res['passed'][0]['fee_pct'], 2), True)
 check('SL ต่ำกว่าราคาเข้าเสมอ', plan['sl_price'] < plan['entry'], True)
 
-no_atr = dw_hsi.plan_prices(res['passed'][0], {'close': 25830.0, 'atr': None})
+no_atr = dw.plan_prices(res['passed'][0], {'close': 25830.0, 'atr': None})
 check('ATR หาย → ถอยไปใช้จุดคุ้มทุน ไม่ใช่ crash', no_atr is not None and
       no_atr['tp_price'] > no_atr['entry'], True)
 check('sensitivity 0 → ไม่มีแผน',
-      dw_hsi.plan_prices({**warrant('X', 0.4, 0.5, 0.0), 'ask': 0.5}, SIG), None)
+      dw.plan_prices({**warrant('X', 0.4, 0.5, 0.0), 'ask': 0.5}, SIG), None)
+
+
+# ------------------------------------------------------------------------------
+print('\ndw — SET50 ใช้เครื่องเดียวกับ HSI คนละชุดข้อมูล')
+
+S50_SIG = {'close': 1_020.0, 'atr': 6.0, 'side': 'C', 'bucket': 's50'}
+
+check('ก้อน s50 ยิงไปที่ underlying ของตัวเอง',
+      [w['symbol'] for w in dw.screen_warrants('C', S50_SIG)['passed']],
+      ['S5013C2512A'])
+check('  ผู้ออกนอกลิสต์ HSI ยังผ่านได้ในก้อน SET50',
+      dw.series('s50')['issuers'], None)
+check('  แต่ถูกกรองทิ้งในก้อน HSI',
+      [w for w in dw.screen_warrants('C', {**SIG, 'bucket': 'dw'})['passed']
+       if w['symbol'].startswith('S50')], [])
+check('  แถวที่ผ่านรู้ว่าตัวเองอยู่ก้อนไหน',
+      dw.screen_warrants('C', S50_SIG)['passed'][0]['bucket'], 's50')
+check('  ขนาดไม้ไม่เกินงบก้อน s50',
+      dw.screen_warrants('C', S50_SIG)['passed'][0]['cost'] <= config.ALLOC['s50'],
+      True)
+
+_asked = {}
+
+
+def _fake_quote(tickers, columns, market='thailand'):
+    _asked['tickers'], _asked['market'] = tickers, market
+    row = {'close': 1_020.0, 'change': 0.8, 'ATR|15': 6.0,
+           'EMA9|15': 1_015.0, 'EMA21|15': 1_010.0, 'EMA50|15': 1_000.0,
+           'high': 1_025.0, 'low': 1_012.0}
+    for tf in ('5', '15', '60'):
+        row[f'RSI|{tf}'] = 62.0
+        row[f'Recommend.All|{tf}'] = 0.9
+    return [row]
+
+
+_real_quote = dw.tv.quote
+dw.tv.quote = _fake_quote
+s50_sig = dw.index_signal('s50')
+dw.tv.quote = _real_quote
+check('สัญญาณ SET50 ถามตลาดไทย ไม่ใช่ตลาดโลก',
+      (_asked['tickers'], _asked['market']),
+      ([config.DW_SERIES['s50']['ticker']], config.DW_SERIES['s50']['market']))
+check('  ติดป้ายก้อนและชื่อดัชนีมาด้วย',
+      (s50_sig['bucket'], s50_sig['series']), ('s50', 'SET50'))
+check('  EMA เรียงขึ้น + คะแนนถึงเกณฑ์ → เข้า call', s50_sig['side'], 'C')
+
+check('SET50 DW เดินตามเวลา SET ไม่ใช่ HKEX',
+      (session.BUCKET_MARKET['s50'], session.BUCKET_MARKET['dw']), ('set', 'hkex'))
+check('  ถือ DW ข้ามคืนเตือนทุกก้อน DW',
+      marks._alert({'bucket': 's50', 'days_held': 1, 'hit_sl': False,
+                    'hit_tp': False, 'stale': False, 'now': 0.5}),
+      'DW ถือข้ามคืน — เสีย theta ทุกวัน ปิดวันนี้')
+
+LIVE = {'keys': ['HSIc1', 'S50U26'], 'update_time': '10:15',
+        'HSIc1': [{'bid': '25,800', 'ask': '25,810'}],
+        'S50U26': [{'bid': '1,019.5', 'ask': '1,020.0'}]}
+_real_get = thaidw._get
+thaidw._get = lambda path: LIVE
+check('futures เลือกคีย์ตาม underlying ไม่ใช่ตัวแรกในลิสต์',
+      (thaidw.futures('S50')['symbol'], thaidw.futures('HSI')['symbol']),
+      ('S50U26', 'HSIc1'))
+check('  ไม่มีคีย์ที่ตรง → None ไม่ใช่ดัชนีตัวอื่น', thaidw.futures('XYZ'), None)
+thaidw._get = _real_get
 
 
 # ------------------------------------------------------------------------------
@@ -274,7 +346,7 @@ for code, retried in ((403, False), (404, False), (429, True), (502, True)):
           calls['n'] > 1, retried)
 
 check('ยังโยน FeedError เดิมให้ caller จับได้',
-      dw_hsi.tv.FeedError is net.FeedError, True)
+      dw.tv.FeedError is net.FeedError, True)
 
 
 # ------------------------------------------------------------------------------
@@ -311,7 +383,8 @@ check('  ก้อนงบ 0 ถูกตัดออก แม้ขอมา�
       config.active_buckets(('dr',)) if config.ALLOC['dr'] <= 0 else (), ())
 
 _saved = dict(config.ALLOC)
-config.ALLOC.update({'dw': 0.0, 'cheap': 1_000.0, 'dr': 500.0})
+config.ALLOC.update({k: 0.0 for k in config.ALLOC})
+config.ALLOC.update({'cheap': 1_000.0, 'dr': 500.0})
 check('  ปิด/เปิดก้อนได้จาก ALLOC อย่างเดียว', config.active_buckets(),
       ('cheap', 'dr'))
 config.ALLOC.clear()

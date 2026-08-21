@@ -1,23 +1,38 @@
 """
-Bucket A — Hang Seng Index DW (issuers 18 = KTX, 28 = MACQ). Day trade,
+The DW engine — one index, one direction call, one instrument. Day trade,
 flat by the close.
 
 Three questions, answered in order:
   1. Direction — what is the index doing? (TradingView, multi-timeframe)
-  2. Instrument — which of the ~31 listed DWs can actually be traded today?
+  2. Instrument — which of the listed DWs can actually be traded today?
   3. Size — how many lots put exactly one unit of risk on the table?
 
 Step 2 is what decides whether a correct call makes money: a DW quoted
 0.03/0.04 costs 33% to enter and exit. Step 3 is what decides whether being
 wrong three days running is a bad week or the end of the account — which is
 why the stop is now computed before the size, not after it.
+
+None of that reasoning is specific to Hang Seng, so none of it is written
+down twice: every function here takes a series key into config.DW_SERIES
+('dw' = HSI, 's50' = SET50) and reads the quotes, the ticker and the issuer
+filter from there. What differs between two DW series is where the numbers
+come from, not what makes a warrant worth buying.
 """
 
 from .. import config, sizing
 from ..feeds import tv, thaidw
 from ..feeds.tv import num
 
-HSI_TICKER = 'HSI:HSI'
+HSI_TICKER = 'HSI:HSI'      # kept for callers that name the ticker directly
+
+
+def series(key: str = 'dw') -> dict:
+    """The config entry for one DW series, by bucket key."""
+    try:
+        return config.DW_SERIES[key]
+    except KeyError:
+        raise KeyError(f"ไม่รู้จัก DW series {key!r} — "
+                       f"มีแค่ {', '.join(config.DW_SERIES)}")
 
 _COLS = [
     'close', 'change', 'open', 'high', 'low',
@@ -32,16 +47,18 @@ _COLS = [
 _TF_WEIGHT = {'5': 0.25, '15': 0.45, '60': 0.30}
 
 
-def index_signal() -> dict:
-    rows = tv.quote([HSI_TICKER], _COLS, market='global')
+def index_signal(key: str = 'dw') -> dict:
+    sr = series(key)
+    rows = tv.quote([sr['ticker']], _COLS, market=sr['market'])
     if not rows:
-        raise tv.FeedError('TradingView returned no data for HSI')
+        raise tv.FeedError(f"TradingView returned no data for {sr['ticker']} "
+                           '— เช็คค่า ticker/market ใน config.DW_SERIES')
     r = rows[0]
 
     close = num(r, 'close')
     atr = num(r, 'ATR|15')
     if close is None:
-        raise tv.FeedError('HSI close price missing — refusing to guess')
+        raise tv.FeedError(f"{sr['name']} close price missing — refusing to guess")
 
     parts, missing = {}, []
     for tf, weight in _TF_WEIGHT.items():
@@ -94,6 +111,7 @@ def index_signal() -> dict:
             bias = f'สัญญาณ{"ขึ้น" if want == "up" else "ลง"} แต่ EMA ยังไม่เรียง ({vetoed})'
 
     return {
+        'bucket': key, 'series': sr['name'],
         'close': close, 'change': num(r, 'change'), 'atr': atr,
         'ema9': ema9, 'ema21': ema21, 'ema50': num(r, 'EMA50|15'),
         'high': num(r, 'high'), 'low': num(r, 'low'),
@@ -214,24 +232,28 @@ def _no_lot_reason(w: dict, pr: dict, risk_thb: float, budget: float) -> str:
 
 
 def screen_warrants(side: str, signal: dict, budget: float = None,
-                    risk_thb: float = None) -> dict:
+                    risk_thb: float = None, key: str = None) -> dict:
     """
-    Rank every listed HSI DW on the requested side. Returns both the tradeable
-    shortlist and the rejects with the reason, because 'why was nothing
-    recommended' is as important as the recommendation.
+    Rank every listed DW in one series on the requested side. Returns both the
+    tradeable shortlist and the rejects with the reason, because 'why was
+    nothing recommended' is as important as the recommendation.
     """
-    budget = config.ALLOC['dw'] if budget is None else budget
+    key = key or signal.get('bucket') or 'dw'
+    sr = series(key)
+    budget = config.ALLOC[key] if budget is None else budget
     risk_thb = config.risk_thb() if risk_thb is None else risk_thb
-    warrants = thaidw.hsi_warrants()
+    warrants = thaidw.warrants(sr['underlying'])
+    issuers = sr['issuers']
 
     passed, rejected = [], []
     for w in warrants:
-        if w['issuer_code'] not in config.DW_ISSUERS:
+        if issuers is not None and w['issuer_code'] not in issuers:
             continue
         if side and w['side'] != side:
             continue
 
         m = dict(w)
+        m['bucket'] = key
         m['days'] = _days_to_expiry(w['last_trade_date'])
         m['spread_pct'] = sizing.spread_pct(w['bid'], w['ask'])
         m['breakeven_pts'] = sizing.breakeven_points(w['bid'], w['ask'], w['sensitivity'])

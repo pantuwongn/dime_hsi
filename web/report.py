@@ -1,33 +1,40 @@
 """
-Collect all three buckets once, as plain data.
+Collect every active bucket once, as plain data.
 
 The terminal renderer and the web page need exactly the same numbers, so the
 gathering lives here and neither renderer computes anything of its own. Each
 bucket is fetched on its own thread: a serverless request has a hard timeout
-and the three buckets touch four independent endpoints, so doing them in
-sequence spends the budget on waiting.
+and the buckets touch independent endpoints, so doing them in sequence spends
+the budget on waiting.
 """
 
 from concurrent.futures import ThreadPoolExecutor
 
 from trader import cache, config, marks, review, risk, session
-from trader.buckets import cheap, dr, dw_hsi
+from trader.buckets import cheap, dr, dw
 from trader.feeds import thaidw
+from trader.feeds.net import FeedError
 from trader.journal import load as load_journal, now_bkk
 
 
-def _dw() -> dict:
-    sig = dw_hsi.index_signal()
-    fut = thaidw.hsi_futures()
-    cache.append('HSI', sig['close'])
+def _dw(key: str = 'dw') -> dict:
+    sr = dw.series(key)
+    sig = dw.index_signal(key)
+    try:
+        fut = thaidw.futures(sr['futures']) if sr['futures'] else None
+    except FeedError:
+        fut = None                      # the panel line, not the bucket
+    cache.append(sr['name'], sig['close'])
 
-    out = {'signal': sig, 'futures': fut, 'passed': [], 'rejected': [],
+    out = {'bucket': key, 'series': sr['name'], 'note': sr['note'],
+           'label': config.BUCKET_LABEL[key],
+           'signal': sig, 'futures': fut, 'passed': [], 'rejected': [],
            'pick': None, 'plan': None}
     if sig['side'] is None:
         out['verdict'] = 'wait'
         return out
 
-    res = dw_hsi.screen_warrants(sig['side'], sig)
+    res = dw.screen_warrants(sig['side'], sig, key=key)
     out['passed'], out['rejected'] = res['passed'], res['rejected']
     if not res['passed']:
         out['verdict'] = 'none'
@@ -75,7 +82,8 @@ def collect(buckets=None) -> dict:
     worse than no card.
     """
     buckets = config.active_buckets(buckets)
-    jobs = {'dw': _dw, 'cheap': _cheap, 'dr': _dr}
+    jobs = {'cheap': _cheap, 'dr': _dr}
+    jobs.update({k: (lambda key=k: _dw(key)) for k in config.DW_SERIES})
     # The journal is a local file and is deliberately not deployed, so on
     # Vercel this is empty and every ledger number would be a zero pretending
     # to be a measurement. Read it once, and let the page know which it has.
@@ -90,9 +98,9 @@ def collect(buckets=None) -> dict:
     # in the same pool rather than adding its latency to the request.
     jobs['_held'] = lambda: marks.mark(st['open']) if st['open'] else []
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = {name: pool.submit(jobs[name])
-                   for name in tuple(buckets) + ('_held',)}
+    names = tuple(buckets) + ('_held',)
+    with ThreadPoolExecutor(max_workers=max(1, len(names))) as pool:
+        futures = {name: pool.submit(jobs[name]) for name in names}
         for name, fut in futures.items():
             try:
                 result = fut.result()

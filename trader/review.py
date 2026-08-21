@@ -107,7 +107,7 @@ def summarise(rows: list = None) -> dict:
     trades = closed_trades(rows)
 
     by_bucket = {}
-    for b in ('dw', 'cheap', 'dr'):
+    for b in config.BUCKET_ORDER:
         by_bucket[b] = _stats([t for t in trades if t['bucket'] == b])
 
     signals = sum(1 for r in rows if r.get('action') == 'SIGNAL')

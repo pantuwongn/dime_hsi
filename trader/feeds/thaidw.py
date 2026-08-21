@@ -1,6 +1,6 @@
 """
 thaidw.com feed — the only public source that carries the Thai-listed
-HSI derivative warrants with their live bid/ask and greeks.
+derivative warrants (HSI, SET50, …) with their live bid/ask and greeks.
 
 TradingView does not list DW symbols at all (SET:HSI28C2610A returns
 totalCount 0), and set.or.th / settrade.com sit behind Imperva and reject
@@ -37,19 +37,38 @@ def num(value, default=float('nan')) -> float:
         return default
 
 
-def hsi_futures() -> dict:
+def futures(code: str = 'HSI') -> dict:
     """
-    Live HSI front-month future (HSIc1) — the actual underlying of every
-    Thai HSI DW. Not the same thing as the ^HSI spot index: the two carry
-    a basis of a few dozen points and the future trades outside cash hours.
+    Live front-month future for one underlying — HSIc1 for the HSI series,
+    S50 for the SET50 series. That future, not the spot index, is what the DW
+    actually tracks: the two carry a basis and the future keeps trading when
+    the cash market is shut.
+
+    Returns None when the feed carries no future for this underlying, because
+    a missing side-panel number is not a reason to lose the whole bucket.
     """
     d = _get('LiveIndexJSON')
     keys = d.get('keys') or []
     if not keys:
         raise FeedError('LiveIndexJSON returned no index keys')
-    row = d[keys[0]][0]
+
+    want = code.upper()
+    key = next((k for k in keys if want in str(k).upper()), None)
+    if key is None:
+        # One key and no match used to be the normal case: the feed carried
+        # HSI alone and this read keys[0] blindly. Keep that working, but do
+        # not hand back some other index under a name it does not have.
+        if len(keys) == 1 and want == 'HSI':
+            key = keys[0]
+        else:
+            return None
+
+    rows = d.get(key) or []
+    if not rows:
+        return None
+    row = rows[0]
     return {
-        'symbol': keys[0],
+        'symbol': key,
         'bid': num(row.get('bid')),
         'ask': num(row.get('ask')),
         'net': num(row.get('net')),
@@ -58,14 +77,28 @@ def hsi_futures() -> dict:
     }
 
 
-def hsi_warrants() -> list:
-    """Every Thai-listed DW on HSI, all issuers, with live bid/ask and greeks."""
-    q = ('ScreenerJSONServlet?underlying=HSI&type=all&issuer=all&maturity=all'
-         '&moneyness=all&moneynessPercent=all&effectiveGearing=all&expiry=all'
-         '&indicator=all&sortBy=&sortOrder=&qid=1')
+def hsi_futures() -> dict:
+    """The HSI future, or a FeedError — the HSI bucket has always had one."""
+    fut = futures('HSI')
+    if fut is None:
+        raise FeedError('LiveIndexJSON carries no HSI future')
+    return fut
+
+
+def warrants(underlying: str = 'HSI') -> list:
+    """
+    Every Thai-listed DW on one underlying, all issuers, with live bid/ask
+    and greeks. `underlying` is thaidw's own code for the series — 'HSI' for
+    Hang Seng, 'S50' for SET50 — and is the only thing that changes between
+    them, screener columns included.
+    """
+    q = (f'ScreenerJSONServlet?underlying={underlying}&type=all&issuer=all'
+         '&maturity=all&moneyness=all&moneynessPercent=all&effectiveGearing=all'
+         '&expiry=all&indicator=all&sortBy=&sortOrder=&qid=1')
     rows = _get(q).get('data', [])
     if not rows:
-        raise FeedError('HSI DW screener returned no rows')
+        raise FeedError(f'DW screener returned no rows for underlying '
+                        f'{underlying} — เช็คค่า underlying ใน config.DW_SERIES')
 
     out = []
     for r in rows:
@@ -92,3 +125,8 @@ def hsi_warrants() -> list:
             'dwps': num(r.get('dwps')),
         })
     return out
+
+
+def hsi_warrants() -> list:
+    """The HSI series, by the name the DW bucket used before it had two."""
+    return warrants('HSI')

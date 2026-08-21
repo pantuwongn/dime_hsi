@@ -40,9 +40,9 @@ def _score_card(s: dict) -> str:
     """The scoreboard. Guessed thresholds stay guesses until this is read."""
     if not s or not s['overall']['n']:
         return ''
-    label = {'dw': 'A · DW', 'cheap': 'B · หุ้น', 'dr': 'C · DR'}
+    label = config.BUCKET_LABEL
     rows = []
-    for b in ('dw', 'cheap', 'dr'):
+    for b in config.BUCKET_ORDER:
         st = s['by_bucket'][b]
         colour = ('var(--up)' if st['net'] > 0
                   else 'var(--down)' if st['net'] < 0 else 'var(--muted)')
@@ -68,7 +68,8 @@ def _score_card(s: dict) -> str:
 def _dw_card(d: dict) -> str:
     if d is None:
         return ''
-    sig, fut = d['signal'], d['futures']
+    sig, fut = d['signal'], d.get('futures')
+    name = d.get('series', 'HSI')
     up = (sig['change'] or 0) >= 0
     arrow = '▲' if up else '▼'
     colour = 'var(--up)' if up else 'var(--down)'
@@ -80,11 +81,15 @@ def _dw_card(d: dict) -> str:
         tail = f"สัญญาณ {sig['composite']:+.0f} · ต้องถึง ±{config.DW_SIGNAL_ENTER}"
 
     rows = [
-        ('HSI (spot)', f'<span style="color:{colour};font-weight:600">'
-                       f"{n(sig['close'], 0)} {arrow} {n(sig['change'])}%</span>"),
-        ('HSIc1 futures', f"{n(fut['bid'], 0)} / {n(fut['ask'], 0)} "
-                          f"<span style='opacity:.6'>· {e(fut['update_time'])} · "
-                          'DW อ้างอิงตัวนี้</span>'),
+        (f'{name} (spot)', f'<span style="color:{colour};font-weight:600">'
+                           f"{n(sig['close'], 0)} {arrow} {n(sig['change'])}%</span>"),
+    ]
+    if fut:
+        rows.append((f"{e(fut['symbol'])} futures",
+                     f"{n(fut['bid'], 0)} / {n(fut['ask'], 0)} "
+                     f"<span style='opacity:.6'>· {e(fut['update_time'])} · "
+                     'DW อ้างอิงตัวนี้</span>'))
+    rows += [
         ('ช่วงวันนี้', f"{n(sig['low'], 0)} – {n(sig['high'], 0)}"
                        f"  <span style='opacity:.6'>ATR15m {n(sig['atr'], 0)}</span>"),
         ('สัญญาณรวม', gauge(sig['composite'], 100.0, config.DW_SIGNAL_ENTER)
@@ -97,8 +102,9 @@ def _dw_card(d: dict) -> str:
                      meter(p['rsi'], 100.0) + f"<div style='margin-top:3px;opacity:.75'>"
                      f"RSI {p['rsi']:.0f} · คะแนน {p['score']:+.0f}</div>"))
 
-    dl = ''.join(f'<dt>{e(k)}</dt><dd>{v}</dd>' for k, v in rows)
-    out = [f'<h2>ก้อน A · HSI DW <small>ผู้ออก 18 KTX + 28 MACQ · เดย์เทรด</small></h2>',
+    dl = ''.join(f'<dt>{k}</dt><dd>{v}</dd>' for k, v in rows)
+    out = [f'<h2>ก้อน {e(d.get("label", "A · DW HSI"))} '
+           f'<small>{e(d.get("note", ""))} · เดย์เทรด</small></h2>',
            badge(d['verdict'], tail), f'<dl class="rows">{dl}</dl>']
 
     if d['passed']:
@@ -129,9 +135,9 @@ def _dw_card(d: dict) -> str:
                    f'RR {p["rr"]:.1f} · เสียมากสุด {n(p["max_loss_thb"], 0)} ฿</dd>'
                    f'<dt>ถ้าถึง TP</dt><dd><span style="color:var(--up)">'
                    f'+{p["tp_gain_pct"]:.0f}%</span> (สุทธิ +{p["tp_net_pct"]:.0f}%) '
-                   f'· HSI ต้องถึง {n(p["index_tp"], 0)}</dd>'
+                   f'· {name} ต้องถึง {n(p["index_tp"], 0)}</dd>'
                    f'<dt>ถ้าโดน SL</dt><dd><span style="color:var(--down)">'
-                   f'{p["sl_loss_pct"]:.0f}%</span> · HSI หลุด {n(p["index_sl"], 0)}</dd>'
+                   f'{p["sl_loss_pct"]:.0f}%</span> · {name} หลุด {n(p["index_sl"], 0)}</dd>'
                    f'<dt>ค่าเข้าออก</dt><dd>spread {pick["spread_pct"]:.1f}% + คอม '
                    f'{pick["fee_pct"]:.2f}% · ดัชนีต้องวิ่ง {n(pick["breakeven_pts"], 0)} '
                    'จุดถึงเสมอตัว</dd>'
@@ -204,11 +210,21 @@ def _entry_rows(m: dict, p: dict, note: str) -> str:
 
 def render(brief: dict) -> str:
     ts = brief['generated_at']
+    # Short names here — this strip sits above the fold on a phone.
+    short = {'dw': 'DW HSI', 's50': 'DW S50', 'cheap': 'หุ้นถูก', 'dr': 'DR'}
     alloc = ''.join(
-        f'<span>{label} <b>{brief["budget"][k]:,.0f}฿</b></span>'
+        f'<span>{short.get(k, k)} <b>{brief["budget"][k]:,.0f}฿</b></span>'
         if brief['budget'].get(k, 0) > 0 else
-        f'<span style="opacity:.55">{label} <b>พัก</b></span>'
-        for k, label in (('dw', 'DW'), ('dr', 'DR'), ('cheap', 'หุ้นถูก')))
+        f'<span style="opacity:.55">{short.get(k, k)} <b>พัก</b></span>'
+        for k in config.BUCKET_ORDER)
+
+    # One card per bucket, in the order the buckets are listed. A bucket that
+    # was not collected (paused, or its feed died) contributes nothing.
+    cards = ''.join(
+        _dw_card(brief.get(k)) if k in config.DW_SERIES
+        else _swing_card(brief.get(k)) if k == 'cheap'
+        else _dr_card(brief.get(k))
+        for k in config.BUCKET_ORDER)
     errors = ''.join(
         f'<div class="err">ก้อน {e(k)} ดึงข้อมูลไม่ได้ — {e(v)}</div>'
         for k, v in brief['errors'].items())
@@ -259,9 +275,7 @@ def render(brief: dict) -> str:
 {stop}
 {errors}
 {_held_card(brief.get('held') or [])}
-{_dw_card(brief.get('dw'))}
-{_swing_card(brief.get('cheap'))}
-{_dr_card(brief.get('dr'))}
+{cards}
 {_score_card(brief.get('review'))}
 <footer>ข้อมูลจาก TradingView และ thaidw.com · หน้านี้คำนวณสดตอนเปิด<br>
 หน้านี้ดูอย่างเดียว — ซื้อขายแล้วบันทึกที่ terminal ด้วย

@@ -15,7 +15,7 @@ import sys
 from trader import (cache, config, graph, journal, marks, review, risk,
                     session, sizing, ui)
 from trader.feeds import tv
-from trader.buckets import dw_hsi, cheap, dr
+from trader.buckets import dw, cheap, dr
 from trader.graph import (bar, big_badge, pad, panel, rr_bar, rsi_gauge,
                           signed_gauge, sparkline)
 
@@ -48,7 +48,7 @@ def _row(cells, widths, aligns=None):
 
 
 # ------------------------------------------------------------------------------
-# BUCKET A — HSI DW
+# BUCKETS A and D — DW, one panel per series (HSI, SET50)
 # ------------------------------------------------------------------------------
 
 _DW_W = [12, 8, 12, 12, 7, 6, 14, 5, 7]
@@ -56,16 +56,23 @@ _DW_H = ['symbol', 'strike', 'bid/ask', 'spread', 'BE จุด', 'θ/วัน'
 _fit(_DW_W, 'ตาราง DW')
 
 
-def show_dw(record: bool) -> None:
+def show_dw(record: bool, key: str = 'dw') -> None:
+    sr = dw.series(key)
+    title = f"ก้อน {config.BUCKET_LABEL[key]}"
     try:
-        sig = dw_hsi.index_signal()
-        fut = dw_hsi.thaidw.hsi_futures()
+        sig = dw.index_signal(key)
+        # The future is a nice-to-have: it labels what the DW really tracks.
+        # Losing it is not losing the bucket, so it is fetched separately.
+        try:
+            fut = dw.thaidw.futures(sr['futures']) if sr['futures'] else None
+        except tv.FeedError:
+            fut = None
     except tv.FeedError as e:
-        _panel('ก้อน A · HSI DW', [ui.c(f'✗ ดึงข้อมูลไม่ได้: {e}', 'bright_red')], 'red')
+        _panel(title, [ui.c(f'✗ ดึงข้อมูลไม่ได้: {e}', 'bright_red')], 'red')
         return
 
-    cache.append('HSI', sig['close'])
-    lines = _stale_line('dw') + _index_block(sig, fut)
+    cache.append(sr['name'], sig['close'])
+    lines = _stale_line(key) + _index_block(sig, fut, sr)
 
     if sig['side'] is None:
         veto = sig.get('vetoed_by_align')
@@ -78,22 +85,22 @@ def show_dw(record: bool) -> None:
             why = '   DW เสีย theta ทุกวัน — วันที่สัญญาณไม่ชัด การอยู่เฉยคือกำไร'
         lines += [''] + big_badge('wait', tail)
         lines += ['', ui.c(why, 'yellow')]
-        _panel('ก้อน A · HSI DW · เดย์เทรด', lines, 'bright_yellow')
+        _panel(f'{title} · เดย์เทรด', lines, 'bright_yellow')
         if record:
-            journal.record('dw', {'action': 'NO_TRADE', 'composite': sig['composite'],
-                                  'hsi': sig['close']})
+            journal.record(key, {'action': 'NO_TRADE', 'composite': sig['composite'],
+                                 'index': sig['close']})
         return
 
-    res = dw_hsi.screen_warrants(sig['side'], sig)
+    res = dw.screen_warrants(sig['side'], sig, key=key)
     tone = 'bright_green' if sig['side'] == 'C' else 'bright_red'
 
     if not res['passed']:
         lines += [''] + big_badge('none', f"สัญญาณ {sig['bias']} แต่ DW ทุกตัวติดเกณฑ์")
         lines += _rejects(res['rejected'])
-        _panel('ก้อน A · HSI DW · เดย์เทรด', lines, 'red')
+        _panel(f'{title} · เดย์เทรด', lines, 'red')
         if record:
-            journal.record('dw', {'action': 'NO_INSTRUMENT', 'side': sig['side'],
-                                  'composite': sig['composite']})
+            journal.record(key, {'action': 'NO_INSTRUMENT', 'side': sig['side'],
+                                 'composite': sig['composite']})
         return
 
     lines += [''] + big_badge('call' if sig['side'] == 'C' else 'put',
@@ -129,11 +136,11 @@ def show_dw(record: bool) -> None:
     lines.append('  ' + pad('กำไรถ้าถึง TP', 16)
                  + ui.c(f"+{plan['tp_gain_pct']:.0f}%", 'bright_green')
                  + ui.c(f"  (สุทธิหลังค่าเข้าออก +{plan['tp_net_pct']:.0f}%)  "
-                        f"HSI ต้องถึง {ui.fmt(plan['index_tp'], 0)}", 'dim'))
+                        f"{sr['name']} ต้องถึง {ui.fmt(plan['index_tp'], 0)}", 'dim'))
     lines.append('  ' + pad('ขาดทุนถ้าโดน SL', 16)
                  + ui.c(f"{plan['sl_loss_pct']:.0f}%", 'bright_red')
                  + ui.c(f"  = {plan['max_loss_thb']:,.0f}฿  "
-                        f"HSI หลุด {ui.fmt(plan['index_sl'], 0)}", 'dim'))
+                        f"{sr['name']} หลุด {ui.fmt(plan['index_sl'], 0)}", 'dim'))
     lines.append('  ' + ui.c(f"ค่าเข้าออก spread {pick['spread_pct']:.1f}% + คอม "
                              f"{pick['fee_pct']:.2f}% — ดัชนีต้องวิ่ง "
                              f"{pick['breakeven_pts']:.0f} จุดถึงเสมอตัว", 'dim'))
@@ -145,30 +152,37 @@ def show_dw(record: bool) -> None:
     lines.append('  ' + ui.c(f"⚠  ปิดสถานะไม่เกิน {config.SESSIONS['eod_close']} น. "
                              '— ห้ามถือ DW ข้ามคืน', 'yellow'))
     lines.append('  ' + ui.c(f"ซื้อจริงแล้วยืนยันด้วย  python3 run.py --took "
-                             f"{pick['symbol']}  เพื่อให้เบรกเกอร์นับไม้นี้", 'dim'))
+                             f"{pick['symbol']} --bucket {key}"
+                             '  เพื่อให้เบรกเกอร์นับไม้นี้', 'dim'))
 
-    _panel('ก้อน A · HSI DW · เดย์เทรด', lines, tone)
+    _panel(f'{title} · เดย์เทรด', lines, tone)
     if record:
-        journal.record('dw', {'action': 'SIGNAL', 'symbol': pick['symbol'],
-                              'side': pick['side'], 'entry': pick['ask'],
-                              'lots': pick['lots'], 'cost': pick['cost'],
-                              'tp': plan['tp_price'], 'sl': plan['sl_price'],
-                              'risk_thb': plan['max_loss_thb'],
-                              'composite': sig['composite'], 'hsi': sig['close']})
+        journal.record(key, {'action': 'SIGNAL', 'symbol': pick['symbol'],
+                             'side': pick['side'], 'entry': pick['ask'],
+                             'lots': pick['lots'], 'cost': pick['cost'],
+                             'tp': plan['tp_price'], 'sl': plan['sl_price'],
+                             'risk_thb': plan['max_loss_thb'],
+                             'composite': sig['composite'], 'index': sig['close']})
 
 
-def _index_block(sig, fut) -> list:
+def _index_block(sig, fut, sr: dict) -> list:
+    name = sr['name']
     up = (sig['change'] or 0) >= 0
     tone = 'bright_green' if up else 'bright_red'
     lines = []
-    lines.append('  ' + pad('HSI (spot)', 16)
+    lines.append('  ' + pad(f'{name} (spot)', 16)
                  + ui.c(pad(f"{ui.fmt(sig['close'], 0)}  {'▲' if up else '▼'} "
                             f"{ui.fmt(sig['change'])}%", 18), 'bold', tone)
-                 + sparkline(cache.series('HSI'))
+                 + sparkline(cache.series(name))
                  + ui.c('   ← สะสมจากรอบก่อน ๆ', 'dim'))
-    lines.append('  ' + pad('HSIc1 (futures)', 16)
-                 + pad(f"{ui.fmt(fut['bid'], 0)} / {ui.fmt(fut['ask'], 0)}", 18)
-                 + ui.c(f"อัปเดต {fut['update_time']} — DW อ้างอิงตัวนี้ ไม่ใช่ spot", 'dim'))
+    if fut:
+        label = f"{fut['symbol']} (futures)"
+        if len(label) >= 16:            # long future codes keep the short form
+            label = f"{fut['symbol']} (fut)"
+        lines.append('  ' + pad(label, 16)
+                     + pad(f"{ui.fmt(fut['bid'], 0)} / {ui.fmt(fut['ask'], 0)}", 18)
+                     + ui.c(f"อัปเดต {fut['update_time']} — DW อ้างอิงตัวนี้ ไม่ใช่ spot",
+                            'dim'))
     lines.append('  ' + pad('ช่วงราคาวันนี้', 16)
                  + pad(ui.fmt(sig['low'], 0), 8)
                  + graph.range_position(sig['low'], sig['high'], sig['close'])
@@ -403,19 +417,24 @@ def show_positions(st: dict) -> None:
     _panel('สถานะที่ถืออยู่', lines, 'cyan')
 
 
+# Short enough that four buckets still fit one line of the header.
+_ALLOC_LABEL = {'dw': ('HSI', 'red'), 's50': ('S50', 'magenta'),
+                'cheap': ('หุ้น', 'green'), 'dr': ('DR', 'blue')}
+
+
 def header(st: dict = None) -> None:
     now = journal.now_bkk()
     total = config.BUDGET_TOTAL
     st = risk.state() if st is None else st
     lines = ['  ' + ui.c(f"{now:%A %d/%m/%Y}  ·  {now:%H:%M} น. (กรุงเทพ)", 'bold')]
     alloc = '  ' + pad(f'ทุนรวม {total:,.0f}฿', 18)
-    for key, label, tone in (('dw', 'DW', 'red'), ('dr', 'DR', 'blue'),
-                             ('cheap', 'หุ้นถูก', 'green')):
-        if config.ALLOC[key] <= 0:      # paused — say so, do not draw an empty bar
-            alloc += ui.c(f"{label} พัก   ", 'dim')
+    for key in config.BUCKET_ORDER:
+        label, tone = _ALLOC_LABEL[key]
+        if config.ALLOC.get(key, 0.0) <= 0:   # paused — no empty bar, just say so
+            alloc += ui.c(f"{label} พัก  ", 'dim')
             continue
-        alloc += f"{label} " + bar(config.ALLOC[key], total, 10, tone) \
-                 + f" {config.ALLOC[key]:,.0f}   "
+        alloc += f"{label} " + bar(config.ALLOC[key], total, 7, tone) \
+                 + f" {config.ALLOC[key]:,.0f}  "
     lines.append(alloc)
     lines.append('  ' + pad('เสี่ยงได้ต่อไม้', 18)
                  + ui.c(f"{config.risk_thb():,.0f}฿", 'bold')
@@ -442,12 +461,12 @@ def header(st: dict = None) -> None:
     _panel('แผนเทรดวันนี้', lines, 'red' if st['blocked'] else 'magenta')
 
 
-_REV_W = [8, 5, 5, 7, 10, 10, 11, 10, 9]
+_REV_W = [10, 5, 5, 7, 10, 10, 11, 10, 9]
 _REV_H = ['ก้อน', 'ไม้', 'ชนะ', '%ชนะ', 'ได้เฉลี่ย', 'เสียเฉลี่ย', 'ค่าธรรมเนียม',
           'สุทธิ฿', 'ต่อไม้฿']
 _fit(_REV_W, 'ตารางสรุปผล')
 
-_BUCKET_LABEL = {'dw': 'A · DW', 'cheap': 'B · หุ้น', 'dr': 'C · DR'}
+_BUCKET_LABEL = config.BUCKET_LABEL
 
 
 def cmd_review() -> int:
@@ -467,7 +486,7 @@ def cmd_review() -> int:
                     + f"   เก็บข้อมูลมา {s['days']} วัน", 'dim'),
              '']
     lines.append(ui.c(_row(_REV_H, _REV_W), 'bold'))
-    for b in ('dw', 'cheap', 'dr'):
+    for b in config.BUCKET_ORDER:
         st = s['by_bucket'][b]
         tone = ('bright_green' if st['net'] > 0
                 else 'bright_red' if st['net'] < 0 else 'dim')
@@ -480,11 +499,11 @@ def cmd_review() -> int:
             ui.c(f"{st['expectancy']:+,.0f}", tone)], _REV_W))
 
     lines += ['', graph.divider(W, 'ควรทำอะไรต่อ')]
-    for b in ('dw', 'cheap', 'dr'):
+    for b in config.BUCKET_ORDER:
         st = s['by_bucket'][b]
         tone = ('dim' if st['n'] < review.MIN_SAMPLE
                 else 'bright_green' if st['expectancy'] > 0 else 'bright_red')
-        lines.append('  ' + pad(_BUCKET_LABEL[b], 10) + ui.c(st['verdict'], tone))
+        lines.append('  ' + pad(_BUCKET_LABEL[b], 12) + ui.c(st['verdict'], tone))
 
     o = s['overall']
     if o['n']:
@@ -503,8 +522,8 @@ def cmd_review() -> int:
         for t in s['trades'][-6:]:
             tone = 'bright_green' if t['pnl'] > 0 else 'bright_red'
             lines.append('  ' + pad(str(t['symbol']), 14)
-                         + pad(_BUCKET_LABEL.get(t['bucket'], '?'), 9)
-                         + pad(f"{t['entry']:.2f} → {t['exit']:.2f}", 16)
+                         + pad(_BUCKET_LABEL.get(t['bucket'], '?'), 12)
+                         + pad(f"{t['entry']:.2f} → {t['exit']:.2f}", 13)
                          + ui.c(pad(f"{t['pnl']:+,.0f}฿", 10, '>'), tone)
                          + ui.c(f"   {t['pnl_pct']:+.1f}%   ถือ {t['days']} วัน", 'dim'))
 
@@ -619,7 +638,8 @@ def cmd_close(symbol: str, price: float, lots: int = None) -> int:
 def main() -> int:
     global PLAIN
     ap = argparse.ArgumentParser(description='แผนเทรดรายวัน 3 ก้อน: DW HSI / หุ้นไทยถูก / DR')
-    ap.add_argument('--bucket', default='all', choices=['all', 'dw', 'cheap', 'dr'])
+    ap.add_argument('--bucket', default='all',
+                    choices=['all'] + list(config.BUCKET_ORDER))
     ap.add_argument('--no-journal', action='store_true', help='ไม่บันทึกลง journal.jsonl')
     ap.add_argument('--plain', action='store_true', help='ปิดกรอบและแถบกราฟ')
     ap.add_argument('--color', action='store_true',
@@ -690,12 +710,13 @@ def main() -> int:
     if args.bucket != 'all' and not scan:
         ui.fail(f"ก้อน {_BUCKET_LABEL.get(args.bucket, args.bucket)} พักอยู่ "
                 '— ตั้งงบใน config.ALLOC ก่อนถึงจะสแกนให้')
-    if 'dw' in scan:
-        show_dw(rec)
-    if 'cheap' in scan:
-        show_cheap(rec)
-    if 'dr' in scan:
-        show_dr(rec)
+    for b in scan:
+        if b in config.DW_SERIES:
+            show_dw(rec, b)
+        elif b == 'cheap':
+            show_cheap(rec)
+        elif b == 'dr':
+            show_dr(rec)
     print(ui.c('  ตัวเลขทั้งหมดเป็นข้อมูลประกอบการตัดสินใจ ไม่ใช่คำแนะนำการลงทุน\n', 'dim'))
     return 0
 

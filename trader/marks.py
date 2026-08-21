@@ -31,12 +31,12 @@ def _stock_marks(symbols: list) -> dict:
     return out
 
 
-def _dw_marks(symbols: list) -> dict:
+def _dw_marks(symbols: list, underlying: str = 'HSI') -> dict:
     if not symbols:
         return {}
     want = {s.upper() for s in symbols}
     out = {}
-    for w in thaidw.hsi_warrants():
+    for w in thaidw.warrants(underlying):
         if w['symbol'].upper() in want:
             bid = w['bid']
             if bid == bid and bid > 0:      # exit price, not last print
@@ -58,11 +58,17 @@ def mark(positions: list) -> list:
     'unknown' per bucket rather than taking the whole brief down — not knowing
     today's price is a reason to say so, not a reason to show nothing.
     """
-    dw = [p['symbol'] for p in positions if p.get('bucket') == 'dw']
-    others = [p['symbol'] for p in positions if p.get('bucket') != 'dw']
+    # One screener call per DW series that actually has something open in it,
+    # and one TradingView call for everything else.
+    jobs = [(_stock_marks, [p['symbol'] for p in positions
+                            if p.get('bucket') not in config.DW_SERIES])]
+    for key, sr in config.DW_SERIES.items():
+        held = [p['symbol'] for p in positions if p.get('bucket') == key]
+        if held:
+            jobs.append((lambda syms, u=sr['underlying']: _dw_marks(syms, u), held))
 
     prices = {}
-    for fetch, syms in ((_stock_marks, others), (_dw_marks, dw)):
+    for fetch, syms in jobs:
         try:
             prices.update(fetch(syms))
         except tv.FeedError:
@@ -102,7 +108,7 @@ def _alert(m: dict) -> str:
         return 'ถึง TP แล้ว — ขายเก็บกำไร แล้ว --close'
     if m['stale']:
         return f"ถือมา {m['days_held']} วัน เกิน {config.CHEAP_HOLD_DAYS} — ปิดได้แล้ว"
-    if m.get('bucket') == 'dw' and m['days_held'] >= 1:
+    if m.get('bucket') in config.DW_SERIES and m['days_held'] >= 1:
         return 'DW ถือข้ามคืน — เสีย theta ทุกวัน ปิดวันนี้'
     if m['now'] is None:
         return 'ไม่รู้ราคาปัจจุบัน — เช็คเองในแอปโบรก'

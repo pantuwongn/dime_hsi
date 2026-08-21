@@ -12,9 +12,10 @@ pure logic.
 BUDGET_TOTAL = 3_000.0
 
 ALLOC = {
-    'dw':    1_000.0,   # HSI DW, day trade, capital recycles daily
-    'dr':        0.0,   # Thai DR — paused, see below
+    'dw':      500.0,   # HSI DW, day trade, capital recycles daily
     'cheap': 2_000.0,   # SET stocks < 3 THB, swing 1-5 days (capital is locked)
+    'dr':        0.0,   # Thai DR — paused, see below
+    's50':     500.0,   # SET50 DW, day trade, same engine as HSI DW
 }
 
 # A bucket at 0 THB is paused, not deleted. Nothing scans it and no card asks
@@ -25,7 +26,11 @@ ALLOC = {
 # 100 units, so a DR at 12 THB is a 1,200 THB ticket — most of the account in
 # one day trade. Give it money back only alongside a DR_MAX_PRICE that a lot
 # of the allocation can actually buy.
-BUCKET_ORDER = ('dw', 'cheap', 'dr')
+BUCKET_ORDER = ('dw', 'cheap', 'dr', 's50')
+
+# Kept to 10 terminal cells: these are table cells as well as panel titles.
+BUCKET_LABEL = {'dw': 'A · DW HSI', 'cheap': 'B · หุ้น', 'dr': 'C · DR',
+                's50': 'D · DW S50'}
 
 
 def active_buckets(want=None) -> tuple:
@@ -86,9 +91,38 @@ MIN_COMM  = 0.0         # Finansia removed its daily minimum in 2017
 
 
 # ------------------------------------------------------------------------------
-# BUCKET A — HSI DW (issuers 18 = KTX, 28 = MACQ)
+# BUCKETS A and D — DW, one entry per underlying
+#
+# The gates below (spread, theta, moneyness, signal) are the same for every DW
+# series, because they are facts about warrants, not about an index. What
+# changes per series is where the quotes come from and when the market is
+# open, so that is all this table holds. Adding another underlying — SET50 was
+# the second — is an entry here plus a budget line in ALLOC, no new code.
+#
+#   underlying  thaidw's screener code for the series
+#   ticker      TradingView symbol for the index the DW tracks
+#   market      which TradingView scanner serves that symbol
+#   issuers     issuer codes to accept, or None for every issuer on the board
+#   futures     thaidw code of the future the DW really tracks, or None
+#
+# The HSI issuer filter (18 = KTX, 28 = MACQ) is there because those two make
+# the market on HSI. SET50 DW is issued by a lot more houses and none of them
+# dominates, so it takes every issuer and lets the spread gate do the culling.
 # ------------------------------------------------------------------------------
-DW_ISSUERS       = ('18', '28')
+DW_SERIES = {
+    'dw': {
+        'name': 'HSI', 'underlying': 'HSI', 'ticker': 'HSI:HSI',
+        'market': 'global', 'issuers': ('18', '28'), 'session': 'hkex',
+        'futures': 'HSI', 'note': 'ผู้ออก 18 KTX + 28 MACQ',
+    },
+    's50': {
+        'name': 'SET50', 'underlying': 'S50', 'ticker': 'SET:SET50',
+        'market': 'thailand', 'issuers': None, 'session': 'set',
+        'futures': 'S50', 'note': 'ทุกผู้ออก',
+    },
+}
+
+DW_ISSUERS       = DW_SERIES['dw']['issuers']   # kept for the HSI series
 DW_MAX_SPREAD    = 8.0    # % of ask. Above this the round trip eats the edge
 DW_MIN_DAYS      = 10     # calendar days to last trading day (theta cliff)
 DW_SOFT_MONEY    = 5.0    # moneyness % beyond which we start penalising
