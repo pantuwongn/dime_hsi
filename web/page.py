@@ -174,14 +174,20 @@ def _swing_card(d: dict) -> str:
     return '<section class="card">' + ''.join(out) + '</section>'
 
 
-def _dr_card(d: dict) -> str:
+def _intraday_card(d: dict) -> str:
     if d is None:
         return ''
+    name = d.get('series', 'DR')
     tail = d['passed'][0]['symbol'] if d['passed'] else 'ถือเงินสด'
-    out = [f'<h2>ก้อน C · DR <small>เทรดตาม gap เปิดตลาด</small></h2>',
+    stamp = (f'{e(name)} ที่มีสภาพคล่อง {d["universe"]} ตัว · '
+             f'ราคา ≤ {d["price_cap"]:,.2f}฿ (1 lot = 100 หน่วย) · '
+             f'มูลค่าซื้อขาย ≥ {d.get("min_value_mb", 0):,.0f} ลบ.')
+    if d['nvdr_filtered']:
+        stamp += f' · กรอง NVDR ออก {d["nvdr_filtered"]} รายการ'
+    out = [f'<h2>ก้อน {e(d.get("label", "C · DR"))} '
+           f'<small>{e(d.get("note", ""))}</small></h2>',
            badge(d['verdict'], tail),
-           f'<p class="stamp">DR ที่มีสภาพคล่อง {d["universe"]} ตัว · '
-           f'กรอง NVDR ออก {d["nvdr_filtered"]} รายการ</p>']
+           f'<p class="stamp">{stamp}</p>']
 
     if d['passed']:
         rows = [[f'<b>{e(m["symbol"])}</b>', e(m['name'][:24]), n(m['close']),
@@ -189,7 +195,7 @@ def _dr_card(d: dict) -> str:
                  meter(m['rvol'], 4.0, 'var(--flat)') + f"<div style='opacity:.7'>{n(m['rvol'], 1)}</div>",
                  n(m['rsi'], 0), f"{n(m['tick_pct'], 2)}%", m['lots'], n(m['cost'], 0)]
                 for m in d['passed'][:6]]
-        out.append(table(['DR', 'หุ้นแม่', 'ราคา', 'gap', 'RVOL', 'RSI',
+        out.append(table([e(name), 'ชื่อ', 'ราคา', 'gap', 'RVOL', 'RSI',
                           '1 ช่อง', 'lot', 'ทุน ฿'], rows))
         m = d['passed'][0]
         out.append(_entry_rows(m, m['plan'], e(m['name'])))
@@ -211,7 +217,8 @@ def _entry_rows(m: dict, p: dict, note: str) -> str:
 def render(brief: dict) -> str:
     ts = brief['generated_at']
     # Short names here — this strip sits above the fold on a phone.
-    short = {'dw': 'DW HSI', 's50': 'DW S50', 'cheap': 'หุ้นถูก', 'dr': 'DR'}
+    short = {'dw': 'DW HSI', 's50': 'DW S50', 'cheap': 'หุ้นสวิง',
+             'dr': 'DR', 'day': 'หุ้นเดย์'}
     alloc = ''.join(
         f'<span>{short.get(k, k)} <b>{brief["budget"][k]:,.0f}฿</b></span>'
         if brief['budget'].get(k, 0) > 0 else
@@ -222,8 +229,8 @@ def render(brief: dict) -> str:
     # was not collected (paused, or its feed died) contributes nothing.
     cards = ''.join(
         _dw_card(brief.get(k)) if k in config.DW_SERIES
-        else _swing_card(brief.get(k)) if k == 'cheap'
-        else _dr_card(brief.get(k))
+        else _intraday_card(brief.get(k)) if k in config.INTRADAY_SERIES
+        else _swing_card(brief.get(k))
         for k in config.BUCKET_ORDER)
     errors = ''.join(
         f'<div class="err">ก้อน {e(k)} ดึงข้อมูลไม่ได้ — {e(v)}</div>'

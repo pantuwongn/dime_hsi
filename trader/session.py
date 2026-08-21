@@ -24,7 +24,8 @@ HOURS = {
 
 # DW series bring their own market with them (HSI trades on HKEX hours,
 # SET50 DW on SET hours), so the map is built rather than typed twice.
-BUCKET_MARKET = {'cheap': 'set', 'dr': 'set'}
+BUCKET_MARKET = {'cheap': 'set'}
+BUCKET_MARKET.update({k: 'set' for k in config.INTRADAY_SERIES})
 BUCKET_MARKET.update({k: sr['session'] for k, sr in config.DW_SERIES.items()})
 _LABEL = {'set': 'SET', 'hkex': 'HKEX'}
 

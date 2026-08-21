@@ -1,16 +1,24 @@
 """
-Bucket C — Thai Depositary Receipts. Day trade / overnight-gap trade.
+The intraday engine — bucket C (Thai DR) and bucket E (SET stocks), both
+bought and sold inside one session.
 
 A DR tracks a foreign share that trades while SET is shut, so by the time
 you can act, the news is already in the price: the opening gap IS the move.
-That makes the useful question 'is the gap still being bought at 10:15, or
-has it already been sold into?' rather than anything a 5-minute chart says.
+A Thai stock is the other way round — the move is still forming while you
+watch it — but the question the screen has to answer is the same one: is
+this still being bought right now, and is what it is reaching for bigger
+than one tick plus commission? So it is one engine, driven by
+config.INTRADAY_SERIES, not two scanners that drift apart.
 
-Two traps this bucket has to handle:
+Traps this has to handle:
   * SET tags NVDRs as type 'dr' too. Of 1,353 rows, only ~115 are real DRs;
     the rest are the '.R' shadow lines of ordinary Thai stocks.
   * DR symbols go stale fast. Issuers delist and relist under new codes, so
     the universe is always fetched live and never hardcoded.
+  * A board lot is 100 units in both buckets, so the money in the bucket —
+    not the price ceiling in config — is what really decides how expensive a
+    name is allowed to be. The screen is capped at what one lot can buy, and
+    says so, rather than listing names and rejecting them one by one.
 """
 
 from .. import config, sizing
@@ -25,22 +33,42 @@ _COLS = [
 ]
 
 
-def scan(budget: float = None, risk_thb: float = None, cash: float = None,
-         exclude=()) -> dict:
-    budget = config.ALLOC['dr'] if budget is None else budget
+def series(key: str = 'dr') -> dict:
+    """The config entry for one intraday series, by bucket key."""
+    try:
+        return config.INTRADAY_SERIES[key]
+    except KeyError:
+        raise KeyError(f"ไม่รู้จักก้อน intraday {key!r} — "
+                       f"มีแค่ {', '.join(config.INTRADAY_SERIES)}")
+
+
+def scan(key: str = 'dr', budget: float = None, risk_thb: float = None,
+         cash: float = None, exclude=()) -> dict:
+    sr = series(key)
+    budget = config.ALLOC[key] if budget is None else budget
     risk_thb = config.risk_thb() if risk_thb is None else risk_thb
     cap = budget if cash is None else max(0.0, min(cash, budget))
+    # What one board lot may cost is the real price ceiling. Screening above it
+    # only produces rows that exist to be rejected.
+    price_cap = min(sr['max_price'], cap / config.BOARD_LOT)
     # Either a plain list of symbols or {symbol: why} — a name held and a
     # name just stopped out are both untouchable, for different reasons.
     exclude = {str(k).upper(): (exclude[k] if isinstance(exclude, dict)
                                 else 'ถืออยู่แล้ว — เงินก้อนนี้ยังไม่ว่าง')
                for k in exclude}
 
+    empty = {'passed': [], 'rejected': [], 'dupes': [], 'universe': 0,
+             'nvdr_filtered': 0, 'cash': cap, 'price_cap': price_cap,
+             'series': sr['name']}
+    if price_cap <= 0:
+        return empty
+
     rows = tv.screen(
         filters=[
-            {'left': 'type', 'operation': 'equal', 'right': 'dr'},
-            {'left': 'Value.Traded', 'operation': 'greater', 'right': config.DR_MIN_VALUE},
-            {'left': 'close', 'operation': 'less', 'right': config.DR_MAX_PRICE},
+            {'left': 'type', 'operation': 'equal', 'right': sr['tv_type']},
+            {'left': 'Value.Traded', 'operation': 'greater',
+             'right': sr['min_value']},
+            {'left': 'close', 'operation': 'less', 'right': price_cap},
         ],
         columns=_COLS, market='thailand', limit=300,
     )
@@ -48,7 +76,7 @@ def scan(budget: float = None, risk_thb: float = None, cash: float = None,
     passed, rejected, nvdr = [], [], 0
     for r in rows:
         sym = r.get('name') or r['_ticker'].split(':')[-1]
-        if sym.endswith('.R'):          # NVDR line of a Thai stock, not a DR
+        if sr['drop_nvdr'] and sym.endswith('.R'):   # shadow line, not a DR
             nvdr += 1
             continue
 
@@ -58,6 +86,7 @@ def scan(budget: float = None, risk_thb: float = None, cash: float = None,
 
         m = {
             'symbol': sym,
+            'bucket': key,
             'name': (r.get('description') or '').split(' Units')[0].split(' Shs')[0][:30],
             'close': close,
             'change': num(r, 'change'),
@@ -77,10 +106,13 @@ def scan(budget: float = None, risk_thb: float = None, cash: float = None,
         if m['symbol'].upper() in exclude:
             reason = exclude[m['symbol'].upper()]
         elif m['rsi'] is None:
-            reason = 'อินดิเคเตอร์ไม่ครบ — DR เพิ่งเข้าเทรด'
-        elif m['tick_pct'] > config.DR_MAX_TICK_PCT:
+            reason = 'อินดิเคเตอร์ไม่ครบ — เพิ่งเข้าเทรด'
+        elif m['tick_pct'] > sr['max_tick_pct']:
             reason = f"1 ช่องราคา = {m['tick_pct']:.1f}% — หยาบเกินเดย์เทรด"
-        elif m['gap'] is not None and m['gap'] > config.DR_MAX_GAP:
+        elif sr['min_rvol'] and (m['rvol'] or 0) < sr['min_rvol']:
+            reason = (f"RVOL {m['rvol'] or 0:.1f} — วันนี้ไม่ได้คึกกว่าปกติ "
+                      f"(ต้อง {sr['min_rvol']:.1f})")
+        elif m['gap'] is not None and m['gap'] > sr['max_gap']:
             reason = f"gap +{m['gap']:.0f}% — ไล่ราคาที่วิ่งไปแล้ว"
         elif m['change'] is not None and m['gap'] is not None and m['gap'] > 0 > m['change']:
             reason = 'เปิด gap ขึ้นแล้วโดนขายทิ้ง — gap fade'
@@ -107,9 +139,11 @@ def scan(budget: float = None, risk_thb: float = None, cash: float = None,
             passed.append(m)
 
     passed.sort(key=lambda x: -x['score'])
-    passed, dupes = _dedupe_underlying(passed)
-    return {'passed': passed, 'rejected': rejected, 'dupes': dupes,
-            'universe': len(rows) - nvdr, 'nvdr_filtered': nvdr, 'cash': cap}
+    dupes = []
+    if sr['dedupe_issuer']:
+        passed, dupes = _dedupe_underlying(passed)
+    return {**empty, 'passed': passed, 'rejected': rejected, 'dupes': dupes,
+            'universe': len(rows) - nvdr, 'nvdr_filtered': nvdr}
 
 
 def _cost_pct(m: dict) -> float:

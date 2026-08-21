@@ -11,7 +11,7 @@ the budget on waiting.
 from concurrent.futures import ThreadPoolExecutor
 
 from trader import cache, config, marks, review, risk, session
-from trader.buckets import cheap, dr, dw
+from trader.buckets import cheap, dw, intraday
 from trader.feeds import thaidw
 from trader.feeds.net import FeedError
 from trader.journal import load as load_journal, now_bkk
@@ -66,11 +66,16 @@ def _cheap() -> dict:
     return res
 
 
-def _dr() -> dict:
-    cash, held = _free('dr')
-    res = dr.scan(cash=cash, exclude=held)
+def _intraday(key: str = 'dr') -> dict:
+    sr = intraday.series(key)
+    cash, held = _free(key)
+    res = intraday.scan(key, cash=cash, exclude=held)
     res['held'] = sorted(held)
     res['verdict'] = 'buy' if res['passed'] else 'wait'
+    res['bucket'] = key
+    res['label'] = config.BUCKET_LABEL[key]
+    res['note'] = sr['note']
+    res['min_value_mb'] = sr['min_value'] / 1e6
     return res
 
 
@@ -82,8 +87,10 @@ def collect(buckets=None) -> dict:
     worse than no card.
     """
     buckets = config.active_buckets(buckets)
-    jobs = {'cheap': _cheap, 'dr': _dr}
+    jobs = {'cheap': _cheap}
     jobs.update({k: (lambda key=k: _dw(key)) for k in config.DW_SERIES})
+    jobs.update({k: (lambda key=k: _intraday(key))
+                 for k in config.INTRADAY_SERIES})
     # The journal is a local file and is deliberately not deployed, so on
     # Vercel this is empty and every ledger number would be a zero pretending
     # to be a measurement. Read it once, and let the page know which it has.

@@ -15,7 +15,7 @@ import sys
 from trader import (cache, config, graph, journal, marks, review, risk,
                     session, sizing, ui)
 from trader.feeds import tv
-from trader.buckets import dw, cheap, dr
+from trader.buckets import dw, cheap, intraday
 from trader.graph import (bar, big_badge, pad, panel, rr_bar, rsi_gauge,
                           signed_gauge, sparkline)
 
@@ -281,35 +281,44 @@ def show_cheap(record: bool) -> None:
 
 
 # ------------------------------------------------------------------------------
-# BUCKET C — DR
+# BUCKETS C and E — intraday (DR, หุ้นไทยเดย์เทรด)
 # ------------------------------------------------------------------------------
 
 _DR_W = [10, 15, 7, 6, 12, 12, 7, 5, 7]
 _DR_H = ['symbol', 'ชื่อ', 'ราคา', 'gap%', 'RVOL', 'RSI', '1 ช่อง%', 'lot', 'ทุน฿']
-_fit(_DR_W, 'ตาราง DR')
+_fit(_DR_W, 'ตาราง intraday')
 
 
-def show_dr(record: bool) -> None:
-    held = [p for p in risk.open_positions() if p.get('bucket') == 'dr']
-    cash = max(0.0, config.ALLOC['dr'] - sum(float(p.get('cost') or 0) for p in held))
+def show_intraday(record: bool, key: str = 'dr') -> None:
+    sr = intraday.series(key)
+    title = f"ก้อน {config.BUCKET_LABEL[key]}"
+    held = [p for p in risk.open_positions() if p.get('bucket') == key]
+    cash = max(0.0, config.ALLOC[key] - sum(float(p.get('cost') or 0) for p in held))
     try:
-        res = dr.scan(cash=cash, exclude=_exclude('dr', held))
+        res = intraday.scan(key, cash=cash, exclude=_exclude(key, held))
     except tv.FeedError as e:
-        _panel('ก้อน C · DR', [ui.c(f'✗ ดึงข้อมูลไม่ได้: {e}', 'bright_red')], 'red')
+        _panel(title, [ui.c(f'✗ ดึงข้อมูลไม่ได้: {e}', 'bright_red')], 'red')
         return
 
-    lines = _stale_line('dr')
-    lines += ['  ' + ui.c(f"DR ที่มีสภาพคล่อง {res['universe']} ตัว", 'bold')
-             + ui.c(f"  กรอง NVDR ออก {res['nvdr_filtered']} รายการ", 'dim')]
-    lines += _cash_line(held, cash, config.ALLOC['dr'])
+    lines = _stale_line(key)
+    head = '  ' + ui.c(f"{sr['name']} ที่มีสภาพคล่อง {res['universe']} ตัว", 'bold')
+    if res['nvdr_filtered']:
+        head += ui.c(f"  กรอง NVDR ออก {res['nvdr_filtered']} รายการ", 'dim')
+    lines += [head]
+    lines += _cash_line(held, cash, config.ALLOC[key])
+    # The money, not config, is what caps how expensive a name may be — 1 lot
+    # is 100 units, so say the ceiling instead of listing names to reject.
+    lines.append('  ' + ui.c(f"คัดเฉพาะราคา ≤ {res['price_cap']:,.2f}฿ "
+                             f"(1 lot = 100 หน่วย ต้องอยู่ในเงินว่าง)  ·  "
+                             f"มูลค่าซื้อขายขั้นต่ำ {sr['min_value'] / 1e6:,.0f} ลบ.", 'dim'))
     if res.get('dupes'):
         dupe_txt = ', '.join(f'{a}→{b}' for a, b in res['dupes'][:4])
         lines.append('  ' + ui.c(f'รวมหุ้นแม่ซ้ำ: {dupe_txt}', 'dim'))
 
     if not res['passed']:
-        lines += [''] + big_badge('wait', 'ไม่มี DR ตัวไหนผ่านเกณฑ์ → ถือเงินสด')
+        lines += [''] + big_badge('wait', f"ไม่มี{sr['name']}ตัวไหนผ่านเกณฑ์ → ถือเงินสด")
         lines += _rejects(res['rejected'])
-        _panel('ก้อน C · DR', lines, 'yellow')
+        _panel(title, lines, 'yellow')
         return
 
     lines += [''] + big_badge('buy', res['passed'][0]['symbol'])
@@ -325,13 +334,15 @@ def show_dr(record: bool) -> None:
     lines += ['', graph.divider(W, 'สั่งซื้อ')]
     m = res['passed'][0]
     lines += _entry_block(m, m['plan'], note=m['name'])
-    _panel('ก้อน C · DR · เทรดตาม gap เปิดตลาด', lines, 'blue')
+    lines.append('  ' + ui.c(f"⚠  ปิดสถานะไม่เกิน {config.SESSIONS['eod_close']} น. "
+                             '— ก้อนนี้คิดมาสำหรับวันเดียว', 'yellow'))
+    _panel(f"{title} · {sr['note']}", lines, 'blue')
     if record:
-        journal.record('dr', {'action': 'SIGNAL', 'symbol': m['symbol'],
-                              'entry': m['plan']['entry'], 'lots': m['lots'],
-                              'cost': m['cost'], 'tp': m['plan']['tp'],
-                              'sl': m['plan']['sl'],
-                              'risk_thb': m['plan']['max_loss_thb']})
+        journal.record(key, {'action': 'SIGNAL', 'symbol': m['symbol'],
+                             'entry': m['plan']['entry'], 'lots': m['lots'],
+                             'cost': m['cost'], 'tp': m['plan']['tp'],
+                             'sl': m['plan']['sl'],
+                             'risk_thb': m['plan']['max_loss_thb']})
 
 
 def _stale_line(bucket: str) -> list:
@@ -419,7 +430,23 @@ def show_positions(st: dict) -> None:
 
 # Short enough that four buckets still fit one line of the header.
 _ALLOC_LABEL = {'dw': ('HSI', 'red'), 's50': ('S50', 'magenta'),
-                'cheap': ('หุ้น', 'green'), 'dr': ('DR', 'blue')}
+                'cheap': ('สวิง', 'green'), 'dr': ('DR', 'blue'),
+                'day': ('วัน', 'cyan')}
+
+
+def _vwidth(text: str) -> int:
+    return graph.dwidth(graph._visible(text))
+
+
+def _wrap_row(prefix: str, parts: list, indent: int) -> list:
+    """One logical row of chips, broken onto more lines when it runs long."""
+    out, line = [], prefix
+    for part in parts:
+        if _vwidth(line + part) > W - 4 and line.strip():
+            out.append(line)
+            line = ' ' * indent
+        line += part
+    return out + [line]
 
 
 def header(st: dict = None) -> None:
@@ -427,15 +454,17 @@ def header(st: dict = None) -> None:
     total = config.BUDGET_TOTAL
     st = risk.state() if st is None else st
     lines = ['  ' + ui.c(f"{now:%A %d/%m/%Y}  ·  {now:%H:%M} น. (กรุงเทพ)", 'bold')]
-    alloc = '  ' + pad(f'ทุนรวม {total:,.0f}฿', 18)
+    parts = []
     for key in config.BUCKET_ORDER:
         label, tone = _ALLOC_LABEL[key]
         if config.ALLOC.get(key, 0.0) <= 0:   # paused — no empty bar, just say so
-            alloc += ui.c(f"{label} พัก  ", 'dim')
+            parts.append(ui.c(f"{label} พัก  ", 'dim'))
             continue
-        alloc += f"{label} " + bar(config.ALLOC[key], total, 7, tone) \
-                 + f" {config.ALLOC[key]:,.0f}  "
-    lines.append(alloc)
+        parts.append(f"{label} " + bar(config.ALLOC[key], total, 7, tone)
+                     + f" {config.ALLOC[key]:,.0f}  ")
+    # Buckets are added over time and the panel is a fixed 94 cells, so the
+    # strip wraps instead of being quietly clipped at the frame.
+    lines += _wrap_row('  ' + pad(f'ทุนรวม {total:,.0f}฿', 18), parts, 20)
     lines.append('  ' + pad('เสี่ยงได้ต่อไม้', 18)
                  + ui.c(f"{config.risk_thb():,.0f}฿", 'bold')
                  + ui.c(f" ({config.RISK_PER_TRADE:.1%})   เพดานขาดทุน/วัน "
@@ -713,10 +742,10 @@ def main() -> int:
     for b in scan:
         if b in config.DW_SERIES:
             show_dw(rec, b)
+        elif b in config.INTRADAY_SERIES:
+            show_intraday(rec, b)
         elif b == 'cheap':
             show_cheap(rec)
-        elif b == 'dr':
-            show_dr(rec)
     print(ui.c('  ตัวเลขทั้งหมดเป็นข้อมูลประกอบการตัดสินใจ ไม่ใช่คำแนะนำการลงทุน\n', 'dim'))
     return 0
 

@@ -110,6 +110,8 @@ def _alert(m: dict) -> str:
         return f"ถือมา {m['days_held']} วัน เกิน {config.CHEAP_HOLD_DAYS} — ปิดได้แล้ว"
     if m.get('bucket') in config.DW_SERIES and m['days_held'] >= 1:
         return 'DW ถือข้ามคืน — เสีย theta ทุกวัน ปิดวันนี้'
+    if config.is_intraday(m.get('bucket')) and m['days_held'] >= 1:
+        return 'ค้างข้ามคืน — แผนนี้คิดมาสำหรับวันเดียว ปิดแล้วเริ่มใหม่'
     if m['now'] is None:
         return 'ไม่รู้ราคาปัจจุบัน — เช็คเองในแอปโบรก'
     return ''

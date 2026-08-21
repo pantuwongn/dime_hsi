@@ -18,7 +18,7 @@ os.environ['NO_COLOR'] = '1'
 os.environ.setdefault('DIME_JOURNAL', os.path.join(tempfile.mkdtemp(), 'j.jsonl'))
 
 from trader import config, marks, review, risk, session, sizing   # noqa: E402
-from trader.buckets import cheap, dr, dw                   # noqa: E402
+from trader.buckets import cheap, dw, intraday             # noqa: E402
 from trader.feeds import thaidw                            # noqa: E402
 
 FAILED = []
@@ -267,14 +267,78 @@ DR_ROWS = [{
     'relative_volume_10d_calc': 1.0, 'RSI': 50.0, 'ATR': 0.03,
     'Perf.W': 0.0, 'Recommend.All': 0.1,
 }]
-dr.tv.screen = scan_rows(DR_ROWS)
+intraday.tv.screen = scan_rows(DR_ROWS)
 
-r = dr.scan(cash=1300.0)
+# DR ถูกพักอยู่ (งบ 0) จึงต้องบอกงบตรง ๆ ไม่งั้นไม่มีอะไรให้สแกน
+r = intraday.scan('dr', budget=1300.0, cash=1300.0)
 check('NVDR ถูกกรองออกจากจักรวาล DR', r['nvdr_filtered'], 1)
+check('  ก้อนที่พักอยู่ ไม่ยิงฟีดถ้าไม่บอกงบมาเอง',
+      intraday.scan('dr')['universe'], 0)
 check('  เหลือ DR จริง', r['universe'], 1)
 check('DR ที่เพิ่งโดน SL วันนี้ถูกกัน',
-      [m['symbol'] for m in dr.scan(
-          cash=1300.0, exclude={'BIDU01': 'เพิ่งโดน SL'})['passed']], [])
+      [m['symbol'] for m in intraday.scan(
+          'dr', budget=1300.0, cash=1300.0,
+          exclude={'BIDU01': 'เพิ่งโดน SL'})['passed']], [])
+
+
+# ------------------------------------------------------------------------------
+print('\nday — หุ้นไทยเดย์เทรด ใช้เครื่องเดียวกับ DR')
+
+
+def stock(sym, close, rvol=2.5, value=3e8, atr=None, gap=1.0, rsi=57.0):
+    return {'_ticker': f'SET:{sym}', 'name': sym, 'description': f'{sym} pcl',
+            'close': close, 'change': gap + 0.5, 'gap': gap,
+            'Value.Traded': value, 'relative_volume_10d_calc': rvol,
+            'RSI': rsi, 'MACD.macd': 0.0, 'MACD.signal': 0.0,
+            'EMA9': close * 0.99, 'EMA21': close * 0.98,
+            'ATR': atr if atr is not None else close * 0.03,
+            'Perf.W': 2.0, 'Recommend.All': 0.4}
+
+
+# ช่องราคา SET เป็นขั้นบันได ราคาที่อยู่เหนือขอบขั้นนิดเดียวจึงแพงต่อช่องที่สุด
+# (2.02 เสีย 0.02 = 1.0% ต่อช่อง ส่วน 4.98 เสีย 0.02 = 0.4%) — ด่านนี้คัดตรงนั้น
+DAY_ROWS = [
+    stock('AAA', 4.98),                  # ช่อง 0.02 = 0.4% — ผ่าน
+    stock('BBB', 4.96, rvol=0.9),        # RVOL ต่ำ — วันนี้ไม่มีอะไรเกิด
+    stock('CCC', 2.02),                  # ช่อง 0.02 = 1.0% — หยาบเกิน
+    stock('DDD', 4.94, gap=8.0),         # gap +8% — ไล่ราคา
+]
+_asked_filter = {}
+
+
+def _spy_screen(filters, columns, market='thailand', **kw):
+    _asked_filter['f'] = {f['left']: f['right'] for f in filters}
+    return DAY_ROWS
+
+
+intraday.tv.screen = _spy_screen
+day = intraday.scan('day', cash=config.ALLOC['day'])
+
+check('ยิงหา type=stock ไม่ใช่ dr', _asked_filter['f']['type'], 'stock')
+check('  ด่านสภาพคล่องของเดย์เทรดสูงกว่าก้อนสวิง',
+      (_asked_filter['f']['Value.Traded'] > config.CHEAP_MIN_VALUE,
+       _asked_filter['f']['Value.Traded']), (True, config.DAY_MIN_VALUE))
+check('  เพดานราคาคิดจากเงินที่ซื้อ 1 lot ได้จริง',
+      _asked_filter['f']['close'], config.ALLOC['day'] / config.BOARD_LOT)
+check('  งบ 0 → ไม่ต้องยิงฟีดเลย',
+      intraday.scan('day', cash=0.0)['passed'], [])
+
+check('ผ่านเฉพาะตัวที่ช่องราคาไม่กินกำไร',
+      [m['symbol'] for m in day['passed']], ['AAA'])
+why = {r['symbol']: r['reject'] for r in day['rejected']}
+check('  RVOL ต่ำถูกตัด', 'RVOL' in why.get('BBB', ''), True)
+check('  1 ช่องราคาหยาบถูกตัด', '1 ช่องราคา' in why.get('CCC', ''), True)
+check('  gap ไปไกลแล้วถูกตัด', 'gap' in why.get('DDD', ''), True)
+check('  ไม่มีการกรอง NVDR ในก้อนหุ้น', day['nvdr_filtered'], 0)
+check('  ไม่รวมชื่อซ้ำแบบ DR (คนละเรื่องกัน)', day['dupes'], [])
+check('  ไม้เดียวไม่เกินงบก้อนและไม่เกินโควตาเสี่ยง',
+      (day['passed'][0]['cost'] <= config.ALLOC['day'],
+       day['passed'][0]['risk_thb'] <= config.risk_thb()), (True, True))
+check('  แถวที่ผ่านรู้ว่าตัวเองอยู่ก้อนไหน', day['passed'][0]['bucket'], 'day')
+check('ก้อนเดย์เทรดยึดเวลา SET', session.BUCKET_MARKET['day'], 'set')
+check('  ค้างข้ามคืนมีคำเตือน',
+      'วันเดียว' in marks._alert({'bucket': 'day', 'days_held': 1, 'hit_sl': False,
+                                  'hit_tp': False, 'stale': False, 'now': 5.0}), True)
 
 
 # ------------------------------------------------------------------------------
