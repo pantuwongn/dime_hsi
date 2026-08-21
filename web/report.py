@@ -76,6 +76,9 @@ def _intraday(key: str = 'day') -> dict:
     res['label'] = config.BUCKET_LABEL[key]
     res['note'] = sr['note']
     res['min_value_mb'] = sr['min_value'] / 1e6
+    res['gates'] = {k: sr[k] for k in
+                    ('min_change', 'max_change', 'min_rvol', 'min_range_pos')
+                    if k in sr}
     return res
 
 

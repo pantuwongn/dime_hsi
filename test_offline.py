@@ -85,7 +85,9 @@ S50_FIXTURE = [
 BOOKS = {'HSI': FIXTURE, 'S50': S50_FIXTURE}
 thaidw.warrants = lambda underlying='HSI': BOOKS[underlying]
 
-res = dw.screen_warrants('C', SIG)
+# ทั้งสองก้อน DW ถูกพักอยู่ (งบ 0) จึงต้องบอกงบตรง ๆ ไม่งั้นไม่มีอะไรให้คัด
+DW_BUDGET = 800.0
+res = dw.screen_warrants('C', SIG, budget=DW_BUDGET)
 check('ผ่านเฉพาะตัวที่เทรดได้จริง',
       [w['symbol'] for w in res['passed']], ['HSI28C2610A'])
 why = {r['symbol']: r['reject'] for r in res['rejected']}
@@ -116,18 +118,21 @@ print('\ndw — SET50 ใช้เครื่องเดียวกับ HSI
 S50_SIG = {'close': 1_020.0, 'atr': 6.0, 'side': 'C', 'bucket': 's50'}
 
 check('ก้อน s50 ยิงไปที่ underlying ของตัวเอง',
-      [w['symbol'] for w in dw.screen_warrants('C', S50_SIG)['passed']],
+      [w['symbol'] for w in dw.screen_warrants(
+          'C', S50_SIG, budget=DW_BUDGET)['passed']],
       ['S5013C2512A'])
 check('  ผู้ออกนอกลิสต์ HSI ยังผ่านได้ในก้อน SET50',
       dw.series('s50')['issuers'], None)
 check('  แต่ถูกกรองทิ้งในก้อน HSI',
-      [w for w in dw.screen_warrants('C', {**SIG, 'bucket': 'dw'})['passed']
+      [w for w in dw.screen_warrants('C', {**SIG, 'bucket': 'dw'},
+                                     budget=DW_BUDGET)['passed']
        if w['symbol'].startswith('S50')], [])
 check('  แถวที่ผ่านรู้ว่าตัวเองอยู่ก้อนไหน',
-      dw.screen_warrants('C', S50_SIG)['passed'][0]['bucket'], 's50')
-check('  ขนาดไม้ไม่เกินงบก้อน s50',
-      dw.screen_warrants('C', S50_SIG)['passed'][0]['cost'] <= config.ALLOC['s50'],
-      True)
+      dw.screen_warrants('C', S50_SIG, budget=DW_BUDGET)['passed'][0]['bucket'],
+      's50')
+check('  ขนาดไม้ไม่เกินงบที่ให้ไป',
+      dw.screen_warrants('C', S50_SIG, budget=DW_BUDGET)['passed'][0]['cost']
+      <= DW_BUDGET, True)
 
 _asked = {}
 
@@ -256,40 +261,46 @@ check('  เหตุผลอ้างเงินว่าง ไม่ใช�
       'เงินว่าง' in r['rejected'][0]['reject'], True)
 
 # ------------------------------------------------------------------------------
-print('\nday — หุ้นไทยเดย์เทรด')
+print('\nday — หุ้นซิ่ง: ต้องกำลังวิ่งจริง ไม่ใช่แค่เขียว')
 
 
-def stock(sym, close, rvol=2.5, value=3e8, atr=None, gap=1.0, rsi=57.0):
+def stock(sym, close, rvol=5.0, value=3e8, chg=6.0, hi=None, lo=None, rsi=62.0):
+    """แถวจาก TradingView หนึ่งตัว — ค่าเริ่มต้นคือตัวที่ผ่านทุกด่าน"""
+    hi = close if hi is None else hi
+    lo = (close * 0.94) if lo is None else lo
     return {'_ticker': f'SET:{sym}', 'name': sym, 'description': f'{sym} pcl',
-            'close': close, 'change': gap + 0.5, 'gap': gap,
+            'close': close, 'change': chg, 'gap': chg / 2.0, 'high': hi, 'low': lo,
             'Value.Traded': value, 'relative_volume_10d_calc': rvol,
             'RSI': rsi, 'MACD.macd': 0.0, 'MACD.signal': 0.0,
             'EMA9': close * 0.99, 'EMA21': close * 0.98,
-            'ATR': atr if atr is not None else close * 0.03,
-            'Perf.W': 2.0, 'Recommend.All': 0.4}
+            'ATR': close * 0.05, 'Perf.W': 8.0, 'Recommend.All': 0.4}
 
 
 # ช่องราคา SET เป็นขั้นบันได ราคาที่อยู่เหนือขอบขั้นนิดเดียวจึงแพงต่อช่องที่สุด
 # (2.02 เสีย 0.02 = 1.0% ต่อช่อง ส่วน 4.98 เสีย 0.02 = 0.4%) — ด่านนี้คัดตรงนั้น
 DAY_ROWS = [
-    stock('AAA', 4.98),                  # ช่อง 0.02 = 0.4% — ผ่าน
-    stock('BBB', 4.96, rvol=0.9),        # RVOL ต่ำ — วันนี้ไม่มีอะไรเกิด
-    stock('CCC', 2.02),                  # ช่อง 0.02 = 1.0% — หยาบเกิน
-    stock('DDD', 4.94, gap=8.0),         # gap +8% — ไล่ราคา
+    stock('RUN', 4.98),                             # วิ่ง +6% ยืนบนยอด — ผ่าน
+    stock('SLOW', 4.96, chg=1.0),                   # +1% ยังไม่วิ่ง
+    stock('BLOWOFF', 4.94, chg=22.0),               # +22% รับของจากคนซื้อก่อน
+    stock('QUIET', 4.92, rvol=1.2),                 # ขึ้นแต่ไม่มีคนเข้า
+    stock('FADED', 4.90, hi=5.30, lo=4.85),         # ขึ้นแล้วโดนขายลงมา
+    stock('COARSE', 2.02),                          # 1 ช่อง = 1% หยาบเกิน
+    stock('THIN', 4.88, value=2e7),                 # สภาพคล่องต่ำ (ตกตั้งแต่ฟีด)
 ]
 _asked_filter = {}
 
 
 def _spy_screen(filters, columns, market='thailand', **kw):
     _asked_filter['f'] = {f['left']: f['right'] for f in filters}
-    return DAY_ROWS
+    keep = _asked_filter['f'].get('Value.Traded', 0)
+    return [r for r in DAY_ROWS if r['Value.Traded'] > keep]
 
 
 intraday.tv.screen = _spy_screen
 day = intraday.scan('day', cash=config.ALLOC['day'])
 
 check('ยิงหา type=stock ไม่ใช่ dr', _asked_filter['f']['type'], 'stock')
-check('  ด่านสภาพคล่องของเดย์เทรดสูงกว่าก้อนสวิง',
+check('  ด่านสภาพคล่องของก้อนซิ่งสูงกว่าก้อนสวิง',
       (_asked_filter['f']['Value.Traded'] > config.CHEAP_MIN_VALUE,
        _asked_filter['f']['Value.Traded']), (True, config.DAY_MIN_VALUE))
 check('  เพดานราคาคิดจากเงินที่ซื้อ 1 lot ได้จริง',
@@ -297,24 +308,41 @@ check('  เพดานราคาคิดจากเงินที่ซ�
 check('  งบ 0 → ไม่ต้องยิงฟีดเลย',
       intraday.scan('day', cash=0.0)['passed'], [])
 
-check('ผ่านเฉพาะตัวที่ช่องราคาไม่กินกำไร',
-      [m['symbol'] for m in day['passed']], ['AAA'])
+check('ผ่านเฉพาะตัวที่วิ่งอยู่จริงและยังถูกไล่ซื้อ',
+      [m['symbol'] for m in day['passed']], ['RUN'])
 why = {r['symbol']: r['reject'] for r in day['rejected']}
-check('  RVOL ต่ำถูกตัด', 'RVOL' in why.get('BBB', ''), True)
-check('  1 ช่องราคาหยาบถูกตัด', '1 ช่องราคา' in why.get('CCC', ''), True)
-check('  gap ไปไกลแล้วถูกตัด', 'gap' in why.get('DDD', ''), True)
+check('  ยังไม่วิ่งถูกตัด', 'ยังไม่วิ่ง' in why.get('SLOW', ''), True)
+check('  วิ่งจนสุดแล้วถูกตัด', 'ซื้อก่อน' in why.get('BLOWOFF', ''), True)
+check('  ราคาขึ้นแต่ไม่มีวอลุ่มถูกตัด', 'RVOL' in why.get('QUIET', ''), True)
+check('  ขึ้นแล้วโดนขายลงมาถูกตัด (ยืนไม่ถึงกรอบวัน)',
+      'กรอบวัน' in why.get('FADED', ''), True)
+check('  1 ช่องราคาหยาบถูกตัด', '1 ช่องราคา' in why.get('COARSE', ''), True)
+check('  สภาพคล่องต่ำไม่ถูกดึงมาตั้งแต่ฟีด', 'THIN' in why, False)
+
+check('ยืนบนยอดกรอบวัน = 1.0 · ครึ่งกรอบ = 0.5',
+      (intraday._range_pos({'close': 5.0, 'high': 5.0, 'low': 4.0}),
+       intraday._range_pos({'close': 4.5, 'high': 5.0, 'low': 4.0})), (1.0, 0.5))
+check('  ฟีดยังไม่มีกรอบวัน → ไม่ตัดทิ้ง',
+      intraday._range_pos({'close': 5.0, 'high': None, 'low': None}), None)
+
+hot = intraday._score({'rvol': 8.0, 'change': 9.0, 'range_pos': 1.0,
+                       'value_mb': 400.0, 'tick_pct': 0.4, 'rsi': 68.0})
+cool = intraday._score({'rvol': 3.1, 'change': 3.2, 'range_pos': 0.65,
+                        'value_mb': 160.0, 'tick_pct': 0.8, 'rsi': 60.0})
+check('เรียงให้ตัวแรงกว่าขึ้นก่อน', hot > cool, True)
+
 check('  ไม้เดียวไม่เกินงบก้อนและไม่เกินโควตาเสี่ยง',
       (day['passed'][0]['cost'] <= config.ALLOC['day'],
        day['passed'][0]['risk_thb'] <= config.risk_thb()), (True, True))
 check('  แถวที่ผ่านรู้ว่าตัวเองอยู่ก้อนไหน', day['passed'][0]['bucket'], 'day')
-check('ก้อนเดย์เทรดยึดเวลา SET', session.BUCKET_MARKET['day'], 'set')
+check('ก้อนซิ่งยึดเวลา SET', session.BUCKET_MARKET['day'], 'set')
 check('  ค้างข้ามคืนมีคำเตือน',
       'วันเดียว' in marks._alert({'bucket': 'day', 'days_held': 1, 'hit_sl': False,
                                   'hit_tp': False, 'stale': False, 'now': 5.0}), True)
 check('ตัวที่เพิ่งโดน SL วันนี้ถูกกันไว้',
       [m['symbol'] for m in intraday.scan(
           'day', cash=config.ALLOC['day'],
-          exclude={'AAA': 'เพิ่งโดน SL'})['passed']], [])
+          exclude={'RUN': 'เพิ่งโดน SL'})['passed']], [])
 
 
 # ------------------------------------------------------------------------------
@@ -426,12 +454,13 @@ print('\nงบ — ก้อนที่พักต้องไม่ถูก
 check('ALLOC รวมไม่เกินทุน', sum(config.ALLOC.values()) <= config.BUDGET_TOTAL, True)
 check('ก้อนที่มีงบเท่านั้นที่ทำงาน', config.active_buckets(),
       tuple(b for b in config.BUCKET_ORDER if config.ALLOC[b] > 0))
+check('  ก้อน DW ที่พักไว้ ไม่ถูกสแกน', config.active_buckets(('dw', 's50')), ())
 _saved = dict(config.ALLOC)
 config.ALLOC.update({k: 0.0 for k in config.ALLOC})
 check('  ก้อนงบ 0 ถูกตัดออก แม้ขอมาตรง ๆ', config.active_buckets(('cheap',)), ())
 config.ALLOC.update({'cheap': 1_000.0, 'day': 500.0})
 check('  ปิด/เปิดก้อนได้จาก ALLOC อย่างเดียว', config.active_buckets(),
-      ('cheap', 'day'))
+      ('day', 'cheap'))
 config.ALLOC.clear()
 config.ALLOC.update(_saved)
 

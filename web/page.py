@@ -180,21 +180,32 @@ def _intraday_card(d: dict) -> str:
         return ''
     name = d.get('series', 'DR')
     tail = d['passed'][0]['symbol'] if d['passed'] else 'ถือเงินสด'
-    stamp = (f'{e(name)}ที่มีสภาพคล่อง {d["universe"]} ตัว · '
+    g = d.get('gates') or {}
+    stamp = (f'{e(name)}ที่ผ่านด่านสภาพคล่อง {d["universe"]} ตัว · '
              f'ราคา ≤ {d["price_cap"]:,.2f}฿ (1 lot = 100 หน่วย) · '
              f'มูลค่าซื้อขาย ≥ {d.get("min_value_mb", 0):,.0f} ลบ.')
+    if g:
+        stamp += (f' · วิ่ง +{g["min_change"]:.0f}% ถึง +{g["max_change"]:.0f}%'
+                  f' · RVOL ≥ {g["min_rvol"]:.0f}x'
+                  f' · ยืนเหนือ {g["min_range_pos"] * 100:.0f}% ของกรอบวัน')
     out = [f'<h2>ก้อน {e(d.get("label", "D · หุ้นเดย์"))} '
            f'<small>{e(d.get("note", ""))}</small></h2>',
            badge(d['verdict'], tail),
            f'<p class="stamp">{stamp}</p>']
 
     if d['passed']:
-        rows = [[f'<b>{e(m["symbol"])}</b>', e(m['name'][:24]), n(m['close']),
-                 f"{n(m['gap'], 1)}%",
-                 meter(m['rvol'], 4.0, 'var(--flat)') + f"<div style='opacity:.7'>{n(m['rvol'], 1)}</div>",
-                 n(m['rsi'], 0), f"{n(m['tick_pct'], 2)}%", m['lots'], n(m['cost'], 0)]
-                for m in d['passed'][:6]]
-        out.append(table([e(name), 'ชื่อ', 'ราคา', 'gap', 'RVOL', 'RSI',
+        rows = []
+        for m in d['passed'][:6]:
+            pos = m.get('range_pos')
+            rows.append([
+                f'<b>{e(m["symbol"])}</b>', e(m['name'][:24]), n(m['close']),
+                f'<span style="color:var(--up)">{n(m["change"], 1)}%</span>',
+                meter(m['rvol'], 8.0, 'var(--flat)')
+                + f"<div style='opacity:.7'>{n(m['rvol'], 1)}x</div>",
+                (meter(pos, 1.0) + f"<div style='opacity:.7'>{pos * 100:.0f}%</div>")
+                if pos is not None else '—',
+                f"{n(m['tick_pct'], 2)}%", m['lots'], n(m['cost'], 0)])
+        out.append(table([e(name), 'ชื่อ', 'ราคา', 'วันนี้', 'RVOL', 'กรอบวัน',
                           '1 ช่อง', 'lot', 'ทุน ฿'], rows))
         m = d['passed'][0]
         out.append(_entry_rows(m, m['plan'], e(m['name'])))
@@ -216,8 +227,8 @@ def _entry_rows(m: dict, p: dict, note: str) -> str:
 def render(brief: dict) -> str:
     ts = brief['generated_at']
     # Short names here — this strip sits above the fold on a phone.
-    short = {'dw': 'DW HSI', 's50': 'DW S50', 'cheap': 'หุ้นสวิง',
-             'day': 'หุ้นเดย์'}
+    short = {'day': 'หุ้นซิ่ง', 'cheap': 'หุ้นสวิง',
+             'dw': 'DW HSI', 's50': 'DW S50'}
     alloc = ''.join(
         f'<span>{short.get(k, k)} <b>{brief["budget"][k]:,.0f}฿</b></span>'
         if brief['budget'].get(k, 0) > 0 else

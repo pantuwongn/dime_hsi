@@ -284,11 +284,12 @@ def show_cheap(record: bool) -> None:
 
 
 # ------------------------------------------------------------------------------
-# BUCKET D — หุ้นไทยเดย์เทรด
+# BUCKET A — หุ้นซิ่ง
 # ------------------------------------------------------------------------------
 
-_DAY_W = [10, 15, 7, 6, 12, 12, 7, 5, 7]
-_DAY_H = ['symbol', 'ชื่อ', 'ราคา', 'gap%', 'RVOL', 'RSI', '1 ช่อง%', 'lot', 'ทุน฿']
+_DAY_W = [10, 12, 7, 7, 12, 9, 7, 5, 7]
+_DAY_H = ['symbol', 'ชื่อ', 'ราคา', 'วันนี้%', 'RVOL', 'กรอบวัน', '1 ช่อง%',
+          'lot', 'ทุน฿']
 _fit(_DAY_W, 'ตาราง intraday')
 
 
@@ -310,7 +311,11 @@ def show_intraday(record: bool, key: str = 'day') -> None:
     # is 100 units, so say the ceiling instead of listing names to reject.
     lines.append('  ' + ui.c(f"คัดเฉพาะราคา ≤ {res['price_cap']:,.2f}฿ "
                              f"(1 lot = 100 หน่วย ต้องอยู่ในเงินว่าง)  ·  "
-                             f"มูลค่าซื้อขายขั้นต่ำ {sr['min_value'] / 1e6:,.0f} ลบ.", 'dim'))
+                             f"มูลค่าซื้อขาย ≥ {sr['min_value'] / 1e6:,.0f} ลบ.", 'dim'))
+    lines.append('  ' + ui.c(f"ต้องวิ่ง +{sr['min_change']:.0f}% ถึง "
+                             f"+{sr['max_change']:.0f}% วันนี้  ·  RVOL ≥ "
+                             f"{sr['min_rvol']:.0f} เท่า  ·  ยืนเหนือ "
+                             f"{sr['min_range_pos'] * 100:.0f}% ของกรอบวัน", 'dim'))
     if not res['passed']:
         lines += [''] + big_badge('wait', f"ไม่มี{sr['name']}ตัวไหนผ่านเกณฑ์ → ถือเงินสด")
         lines += _rejects(res['rejected'])
@@ -321,11 +326,17 @@ def show_intraday(record: bool, key: str = 'day') -> None:
 
     lines += ['', ui.c(_row(_DAY_H, _DAY_W), 'bold')]
     for m in res['passed'][:6]:
+        pos = m.get('range_pos')
         lines.append(_row([
-            m['symbol'], m['name'][:14], ui.fmt(m['close']), ui.fmt(m['gap'], 1),
-            bar(m['rvol'], 4.0, 8, 'magenta') + f" {ui.fmt(m['rvol'], 1)}",
-            rsi_gauge(m['rsi'], 8) + f" {ui.fmt(m['rsi'], 0)}",
+            m['symbol'], m['name'][:11], ui.fmt(m['close']),
+            ui.c(f"{m['change']:+.1f}" if m['change'] is not None else '-',
+                 'bright_green'),
+            bar(m['rvol'], 8.0, 8, 'magenta') + f" {ui.fmt(m['rvol'], 1)}",
+            (bar(pos, 1.0, 5, 'cyan') + f" {pos * 100:.0f}%") if pos is not None
+            else '   -',
             ui.fmt(m['tick_pct'], 2), m['lots'], ui.fmt(m['cost'], 0)], _DAY_W))
+
+    lines += _rejects(res['rejected'])
 
     lines += ['', graph.divider(W, 'สั่งซื้อ')]
     m = res['passed'][0]
@@ -425,8 +436,8 @@ def show_positions(st: dict) -> None:
 
 
 # Short enough that four buckets still fit one line of the header.
-_ALLOC_LABEL = {'dw': ('HSI', 'red'), 's50': ('S50', 'magenta'),
-                'cheap': ('สวิง', 'green'), 'day': ('วัน', 'cyan')}
+_ALLOC_LABEL = {'day': ('ซิ่ง', 'cyan'), 'cheap': ('สวิง', 'green'),
+                'dw': ('HSI', 'red'), 's50': ('S50', 'magenta')}
 
 
 def _vwidth(text: str) -> int:

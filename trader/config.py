@@ -12,26 +12,32 @@ pure logic.
 BUDGET_TOTAL = 5_000.0
 
 ALLOC = {
-    'dw':      800.0,   # HSI DW, day trade, capital recycles daily
-    's50':     800.0,   # SET50 DW, day trade, same engine as HSI DW
-    'cheap': 1_700.0,   # SET stocks < 3 THB, swing 1-5 days (capital is locked)
-    'day':   1_700.0,   # SET stocks, day trade, flat by the close
+    'day':   3_500.0,   # SET stocks that are running today, flat by the close
+    'cheap': 1_500.0,   # SET stocks < 3 THB, swing 1-5 days (capital is locked)
+    'dw':        0.0,   # HSI DW — paused, see below
+    's50':       0.0,   # SET50 DW — paused, see below
 }
 
 # A bucket at 0 THB is paused, not deleted. Nothing scans it and no card asks
 # to be traded, but the journal keeps its history and --review still scores it,
 # so pausing or resuming one is a number here rather than a code change.
 #
-# Two thirds of the money is in buckets that are flat by the close, which is
-# the point: this account trades the day, and the swing bucket is what is left
-# over rather than the main event.
-BUCKET_ORDER = ('dw', 's50', 'cheap', 'day')
+# Seventy percent of the account is in the bucket that chases what is moving
+# today and is flat by the close, because that is what this account is for.
+# Waiting several days for a cheap stock to wake up is the smaller half now.
+#
+# Both DW buckets are paused rather than deleted: the engine and the thaidw
+# feed still work, and DW may come back if the broker turns out to carry it.
+# Until then a DW ticket pays 3-8% of spread before it is right about
+# anything, which is the wrong instrument for chasing a move that is already
+# under way.
+BUCKET_ORDER = ('day', 'cheap', 'dw', 's50')
 
 # Kept to 10 terminal cells: these are table cells as well as panel titles.
 # The letters follow display order — the journal keys (dw, s50, cheap, day)
 # are what history is written under and never change.
-BUCKET_LABEL = {'dw': 'A · DW HSI', 's50': 'B · DW S50',
-                'cheap': 'C · หุ้นสวิง', 'day': 'D · หุ้นเดย์'}
+BUCKET_LABEL = {'day': 'A · หุ้นซิ่ง', 'cheap': 'B · หุ้นสวิง',
+                'dw': 'C · DW HSI', 's50': 'D · DW S50'}
 
 
 def active_buckets(want=None) -> tuple:
@@ -142,36 +148,53 @@ CHEAP_HOLD_DAYS  = 5
 CHEAP_MIN_RR     = 1.5            # target must clear the stop by 1.5x
 
 # ------------------------------------------------------------------------------
-# BUCKET D — intraday, SET stocks
+# BUCKET A — หุ้นซิ่ง, bought and sold inside the session
 #
-# One question: is what ran this morning still being bought, and is the move on
-# offer bigger than one tick plus commission by enough to be worth the ticket?
-# The table is keyed by bucket so a second intraday universe (DR came and went;
-# stock warrants could come next) is an entry here, not a second scanner.
+# The bet is momentum that is happening right now, not momentum that might
+# start next week. So the screen asks four things in order, and all four have
+# to be true at the same moment:
 #
-#   tv_type       TradingView's `type` for the instrument
-#   min_value     THB traded today, below which you cannot get out inside a day
-#   max_price     price ceiling, further capped by what one board lot costs
-#   max_tick_pct  one tick as % of price — the floor under every round trip
-#   max_gap       % already moved at the open, beyond which you are chasing
-#   min_rvol      volume vs its own 10-day normal, below which nothing is up
+#   1. Is it moving?      change >= min_change, and not so far that the move
+#                         is already spent (max_change)
+#   2. Is anyone there?   RVOL >= min_rvol and min_value THB traded today —
+#                         a runner you cannot get out of is not a runner
+#   3. Is it still bid?   close in the top of today's range (min_range_pos).
+#                         Same +6% day, closing at the high or at the low, is
+#                         two completely different trades
+#   4. Can it pay?        one tick <= max_tick_pct, so the grid does not eat
+#                         the move before the move happens
 #
-# These gates are stricter than a swing trade's because the exit is hours away,
-# not days: a tick is 0.8% of the ticket here, and paying it for a move that
-# was over before the open is a losing trade with extra steps.
+#   tv_type        TradingView's `type` for the instrument
+#   min_value      THB traded today, below which you cannot get out inside a day
+#   max_price      price ceiling, further capped by what one board lot costs
+#   max_tick_pct   one tick as % of price — the floor under every round trip
+#   min_rvol       volume vs its own 10-day normal
+#   min_change     % up on the day before it is worth looking at
+#   max_change     % up on the day past which you are buying someone's exit
+#   min_range_pos  0..1, where the price sits between today's low and high
+#   tp_atr/sl_atr  target and stop as multiples of today's ATR. A stock that
+#                  is running has a big ATR already, so both are wider than a
+#                  quiet-market scalp would use: the trade is the move, and a
+#                  stop inside the noise gets hit by the noise
 # ------------------------------------------------------------------------------
-DAY_MIN_VALUE    = 100_000_000.0  # a day trade has to be exitable within hours
-DAY_MAX_PRICE    = 20.0
-DAY_MAX_GAP      = 6.0
+DAY_MIN_VALUE    = 150_000_000.0  # a runner you cannot exit is not a runner
+DAY_MAX_PRICE    = 60.0           # further capped by what one board lot costs
 DAY_MAX_TICK_PCT = 0.8            # 0.8% a tick + 0.31% commission is the floor
-DAY_MIN_RVOL     = 1.5            # today has to be busier than its own normal
+DAY_MIN_RVOL     = 3.0            # today has to be 3x its own normal volume
+DAY_MIN_CHANGE   = 3.0            # % up on the day — it has to be moving NOW
+DAY_MAX_CHANGE   = 15.0           # past this you are the exit, not the entry
+DAY_MIN_RANGE_POS = 0.6           # where in today's range it sits, 1.0 = at high
+DAY_TP_ATR       = 1.2            # target as N x today's ATR — riding a move
+DAY_SL_ATR       = 0.7            # stop, wide enough not to be noise
 
 INTRADAY_SERIES = {
     'day': {
-        'name': 'หุ้นไทย', 'tv_type': 'stock', 'min_value': DAY_MIN_VALUE,
+        'name': 'หุ้นซิ่ง', 'tv_type': 'stock', 'min_value': DAY_MIN_VALUE,
         'max_price': DAY_MAX_PRICE, 'max_tick_pct': DAY_MAX_TICK_PCT,
-        'max_gap': DAY_MAX_GAP, 'min_rvol': DAY_MIN_RVOL,
-        'note': 'โมเมนตัมในวัน ปิดก่อนตลาดปิด',
+        'min_rvol': DAY_MIN_RVOL, 'min_change': DAY_MIN_CHANGE,
+        'max_change': DAY_MAX_CHANGE, 'min_range_pos': DAY_MIN_RANGE_POS,
+        'tp_atr': DAY_TP_ATR, 'sl_atr': DAY_SL_ATR,
+        'note': 'ไล่ตัวที่กำลังวิ่งวันนี้ ปิดก่อนตลาดปิด',
     },
 }
 
@@ -186,6 +209,8 @@ def is_intraday(bucket: str) -> bool:
 SESSIONS = {
     'dw_morning':   '08:35',   # HKEX 09:30 HKT + 5 min for the spread to settle
     'dw_afternoon': '12:05',   # HKEX 13:00 HKT
-    'set_morning':  '10:15',   # SET has been open ~25 min
+    'set_morning':  '10:15',   # SET has been open ~25 min — the day has a shape
+    'set_midday':   '11:30',   # second look if the morning had nothing
+    'set_afternoon': '14:45',  # what held its high all day is the real one
     'eod_close':    '15:45',   # close every day-trade position
 }
