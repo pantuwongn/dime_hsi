@@ -67,8 +67,14 @@ def _dr() -> dict:
     return res
 
 
-def collect(buckets=('dw', 'cheap', 'dr')) -> dict:
-    """Returns {bucket: result} plus an 'errors' map for whatever failed."""
+def collect(buckets=None) -> dict:
+    """Returns {bucket: result} plus an 'errors' map for whatever failed.
+
+    Buckets defaults to the ones with money behind them: a bucket at 0 THB in
+    ALLOC is paused, and a card recommending trades it has no budget for is
+    worse than no card.
+    """
+    buckets = config.active_buckets(buckets)
     jobs = {'dw': _dw, 'cheap': _cheap, 'dr': _dr}
     # The journal is a local file and is deliberately not deployed, so on
     # Vercel this is empty and every ledger number would be a zero pretending

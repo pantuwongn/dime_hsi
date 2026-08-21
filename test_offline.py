@@ -302,6 +302,23 @@ check('พอครบตัวอย่าง กล้าบอกให้ต
 
 
 # ------------------------------------------------------------------------------
+print('\nงบ — ก้อนที่พักต้องไม่ถูกสแกน')
+
+check('ALLOC รวมไม่เกินทุน', sum(config.ALLOC.values()) <= config.BUDGET_TOTAL, True)
+check('ก้อนที่มีงบเท่านั้นที่ทำงาน', config.active_buckets(),
+      tuple(b for b in config.BUCKET_ORDER if config.ALLOC[b] > 0))
+check('  ก้อนงบ 0 ถูกตัดออก แม้ขอมาตรง ๆ',
+      config.active_buckets(('dr',)) if config.ALLOC['dr'] <= 0 else (), ())
+
+_saved = dict(config.ALLOC)
+config.ALLOC.update({'dw': 0.0, 'cheap': 1_000.0, 'dr': 500.0})
+check('  ปิด/เปิดก้อนได้จาก ALLOC อย่างเดียว', config.active_buckets(),
+      ('cheap', 'dr'))
+config.ALLOC.clear()
+config.ALLOC.update(_saved)
+
+
+# ------------------------------------------------------------------------------
 print()
 if FAILED:
     for f in FAILED:

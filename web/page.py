@@ -206,6 +206,8 @@ def render(brief: dict) -> str:
     ts = brief['generated_at']
     alloc = ''.join(
         f'<span>{label} <b>{brief["budget"][k]:,.0f}฿</b></span>'
+        if brief['budget'].get(k, 0) > 0 else
+        f'<span style="opacity:.55">{label} <b>พัก</b></span>'
         for k, label in (('dw', 'DW'), ('dr', 'DR'), ('cheap', 'หุ้นถูก')))
     errors = ''.join(
         f'<div class="err">ก้อน {e(k)} ดึงข้อมูลไม่ได้ — {e(v)}</div>'

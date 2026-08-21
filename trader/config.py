@@ -12,10 +12,27 @@ pure logic.
 BUDGET_TOTAL = 3_000.0
 
 ALLOC = {
-    'dw':      700.0,   # HSI DW, day trade, capital recycles daily
-    'dr':      800.0,   # Thai DR, day trade / overnight-gap trade
-    'cheap': 1_500.0,   # SET stocks < 3 THB, swing 1-5 days (capital is locked)
+    'dw':    1_000.0,   # HSI DW, day trade, capital recycles daily
+    'dr':        0.0,   # Thai DR — paused, see below
+    'cheap': 2_000.0,   # SET stocks < 3 THB, swing 1-5 days (capital is locked)
 }
+
+# A bucket at 0 THB is paused, not deleted. Nothing scans it and no card asks
+# to be traded, but the journal keeps its history and --review still scores it,
+# so turning it back on is one number here rather than a code change.
+#
+# DR is paused because it does not fit this account any more: a board lot is
+# 100 units, so a DR at 12 THB is a 1,200 THB ticket — most of the account in
+# one day trade. Give it money back only alongside a DR_MAX_PRICE that a lot
+# of the allocation can actually buy.
+BUCKET_ORDER = ('dw', 'cheap', 'dr')
+
+
+def active_buckets(want=None) -> tuple:
+    """Buckets with money behind them, in display order."""
+    return tuple(b for b in (BUCKET_ORDER if want is None else want)
+                 if ALLOC.get(b, 0.0) > 0)
+
 
 BOARD_LOT = 100         # SET board lot for stocks, DW and DR alike
 
@@ -38,8 +55,8 @@ MAX_DAILY_LOSS   = 0.04    # realised + still-open risk that ends the day
 MAX_DAILY_TRADES = 2       # confirmed entries per day, all buckets together
 
 # Costs are paid per trade, so trading often is itself a strategy — a losing
-# one here. A 6% DW spread on a 700 THB ticket is 42 THB each way; taken
-# daily that is 840 THB a month, 28% of the whole account, before being
+# one here. A 6% DW spread on a 1,000 THB ticket is 60 THB each way; taken
+# daily that is 1,200 THB a month, 40% of the whole account, before being
 # right or wrong about anything. So a setup has to promise a multiple of what
 # it costs, or it is not a setup, it is a fee.
 MIN_EDGE_MULTIPLE = 3.0    # target must be N x the round trip it has to clear
@@ -59,7 +76,7 @@ def daily_loss_limit() -> float:
 #
 # Set to your own broker's rate — this is the one number here that is not a
 # strategy choice but a fact about your account. MIN_COMM is the daily floor:
-# a 50 THB minimum turns a 700 THB position into a 14% round trip, which no
+# a 50 THB minimum turns a 1,000 THB position into a 10% round trip, which no
 # intraday edge survives, so brokers that charge one are unusable at this size.
 #
 #   Finansia Syrus (current)  0.157%   no minimum

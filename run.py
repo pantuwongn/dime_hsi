@@ -411,6 +411,9 @@ def header(st: dict = None) -> None:
     alloc = '  ' + pad(f'ทุนรวม {total:,.0f}฿', 18)
     for key, label, tone in (('dw', 'DW', 'red'), ('dr', 'DR', 'blue'),
                              ('cheap', 'หุ้นถูก', 'green')):
+        if config.ALLOC[key] <= 0:      # paused — say so, do not draw an empty bar
+            alloc += ui.c(f"{label} พัก   ", 'dim')
+            continue
         alloc += f"{label} " + bar(config.ALLOC[key], total, 10, tone) \
                  + f" {config.ALLOC[key]:,.0f}   "
     lines.append(alloc)
@@ -655,8 +658,8 @@ def main() -> int:
         from web.page import render
         from web.report import collect
         with open(args.html, 'w', encoding='utf-8') as fh:
-            fh.write(render(collect(
-                ('dw', 'cheap', 'dr') if args.bucket == 'all' else (args.bucket,))))
+            fh.write(render(collect(config.active_buckets(
+                None if args.bucket == 'all' else (args.bucket,)))))
         print(f'เขียน {args.html} แล้ว — เปิดด้วยเบราว์เซอร์เพื่อดูหน้าเว็บ')
         return 0
 
@@ -681,11 +684,17 @@ def main() -> int:
         return 0
 
     rec = not args.no_journal
-    if args.bucket in ('all', 'dw'):
+    scan = config.active_buckets(
+        None if args.bucket == 'all' else (args.bucket,))
+    # Asking for a paused bucket by name is answered, not silently ignored.
+    if args.bucket != 'all' and not scan:
+        ui.fail(f"ก้อน {_BUCKET_LABEL.get(args.bucket, args.bucket)} พักอยู่ "
+                '— ตั้งงบใน config.ALLOC ก่อนถึงจะสแกนให้')
+    if 'dw' in scan:
         show_dw(rec)
-    if args.bucket in ('all', 'cheap'):
+    if 'cheap' in scan:
         show_cheap(rec)
-    if args.bucket in ('all', 'dr'):
+    if 'dr' in scan:
         show_dr(rec)
     print(ui.c('  ตัวเลขทั้งหมดเป็นข้อมูลประกอบการตัดสินใจ ไม่ใช่คำแนะนำการลงทุน\n', 'dim'))
     return 0
